@@ -1,10 +1,13 @@
 {
   "name": "key-transparency-web-client",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Key Transparency Web Client",
+  "main": "lib/index.js",
+  "module": "lib/index.js",
+  "types": "lib/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint lib --ext .js,.ts,tsx --quiet --cache"
   },
   "repository": {
     "type": "git",
@@ -15,5 +18,21 @@
   "bugs": {
     "url": "https://github.com/ProtonMail/key-transparency-web-client/issues"
   },
-  "homepage": "https://github.com/ProtonMail/key-transparency-web-client#readme"
+  "homepage": "https://github.com/ProtonMail/key-transparency-web-client#readme",
+  "dependencies": {
+    "@types/asn1js": "^2.0.0",
+    "@types/pkijs": "0.0.6",
+    "asn1js": "^2.0.26",
+    "pkijs": "^2.1.90",
+    "pmcrypto": "github:ProtonMail/pmcrypto.git#semver:~6.3.0",
+    "vrf.js": "0.0.5"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^4.7.0",
+    "@typescript-eslint/parser": "^4.7.0",
+    "eslint": "^7.13.0",
+    "eslint-config-proton-lint": "github:ProtonMail/proton-lint#semver:^0.0.4",
+    "eslint-plugin-import": "^2.22.1",
+    "typescript": "^4.0.3"
+  }
 }
