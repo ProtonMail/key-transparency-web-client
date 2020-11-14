@@ -1,3 +1,9 @@
+export const VERIFY_PK_STATUS = {
+  VERIFY_PK_FAILED: 0,
+  VERIFY_PK_PASSED: 1,
+  VERIFY_PK_WARNING: 2,
+};
+
 export const vrfHexKey =
   "2d7688feb429f714f102f758412cd4b81337b307122770f620ad9e4ac898a2eb";
 

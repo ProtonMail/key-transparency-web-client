@@ -1,49 +1,66 @@
-import { SHA256, arrayToHexString, concatArrays, binaryStringToArray } from 'pmcrypto';
-import { ecvrf } from 'vrf.js';
-import { stringToUint8Array } from './helpers/helpers/encoding';
-import { vrfHexKey } from './certificates';
+import {
+  SHA256,
+  arrayToHexString,
+  concatArrays,
+  binaryStringToArray,
+} from "pmcrypto";
+import { vrfVerify } from "./vrf";
+import { vrfHexKey } from "./constants";
 
 const LEFT_N = 1; // left neighbor
 
+function hexStringToArray(hex: string): Uint8Array {
+  const result = new Uint8Array(hex.length >> 1);
+  for (let k = 0; k < hex.length >> 1; k++) {
+    result[k] = parseInt(hex.substr(k << 1, 2), 16);
+  }
+  return result;
+}
+
 export async function verifyProof(
-    Name: string,
-    Revision: number,
-    Proof: string,
-    Neighbors: string[],
-    TreeHash: string,
-    sklData: string,
-    email: string
+  Name: string,
+  Revision: number,
+  Proof: string,
+  Neighbors: string[],
+  TreeHash: string,
+  sklData: string,
+  email: string
 ) {
-    // Verify proof
-    const publicKey = Buffer.from(stringToUint8Array(vrfHexKey));
-    const message = Buffer.from(binaryStringToArray(email));
-    const proofBuffer = Buffer.from(stringToUint8Array(Proof));
-    const valueBuffer = Buffer.from(stringToUint8Array(Name));
+  // Verify proof
+  const publicKey = Buffer.from(hexStringToArray(vrfHexKey));
+  const message = Buffer.from(binaryStringToArray(email));
+  const proofBuffer = Buffer.from(hexStringToArray(Proof));
+  const valueBuffer = Buffer.from(hexStringToArray(Name));
 
-    const verifiedProof = ecvrf.verify(publicKey, message, proofBuffer, valueBuffer);
-    if (!verifiedProof) {
-        throw new Error('Proof verification failed');
-    }
+  try {
+    await vrfVerify(publicKey, message, proofBuffer, valueBuffer);
+  } catch (err) {
+    throw new Error(`VRF verification failed with error "${err.message}"`);
+  }
 
-    // Parse proof and verify epoch against proof
-    let val = await SHA256(
-        concatArrays([
-            await SHA256(binaryStringToArray(sklData)),
-            binaryStringToArray('.'),
-            binaryStringToArray(`${Revision}`),
-        ])
-    );
-    const emptyNode = new Uint8Array(32);
-    const key = stringToUint8Array(Name);
+  // Parse proof and verify epoch against proof
+  let val = await SHA256(
+    concatArrays([
+      await SHA256(binaryStringToArray(sklData)),
+      binaryStringToArray("."),
+      binaryStringToArray(`${Revision}`),
+    ])
+  );
+  const emptyNode = new Uint8Array(32);
+  const key = hexStringToArray(Name);
 
-    for (let i = Neighbors.length - 1; i >= 0; i--) {
-        const bit = (key[Math.floor(i / 8) % 32] >> (8 - (i % 8) - 1)) & 1;
-        const neighbor = Neighbors[i] === null ? emptyNode : stringToUint8Array(Neighbors[i]);
-        const toHash = bit === LEFT_N ? concatArrays([neighbor, val]) : concatArrays([val, neighbor]);
-        val = await SHA256(toHash);
-    }
+  for (let i = Neighbors.length - 1; i >= 0; i--) {
+    const bit = (key[Math.floor(i / 8) % 32] >> (8 - (i % 8) - 1)) & 1;
+    const neighbor =
+      Neighbors[i] === null ? emptyNode : hexStringToArray(Neighbors[i]);
+    const toHash =
+      bit === LEFT_N
+        ? concatArrays([neighbor, val])
+        : concatArrays([val, neighbor]);
+    val = await SHA256(toHash);
+  }
 
-    if (arrayToHexString(val) !== TreeHash) {
-        throw new Error('Hash chain does not result in TreeHash');
-    }
+  if (arrayToHexString(val) !== TreeHash) {
+    throw new Error("Hash chain does not result in TreeHash");
+  }
 }

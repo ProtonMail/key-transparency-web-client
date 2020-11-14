@@ -1,4 +1,4 @@
 export interface SignedKeyList {
-    Data: string;
-    Signature: string;
+  Data: string;
+  Signature: string;
 }

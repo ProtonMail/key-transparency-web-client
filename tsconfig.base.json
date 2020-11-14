@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "target": "es2018",
+        "lib": ["dom", "dom.iterable", "esnext"],
+        "esModuleInterop": true,
+        "strict": true,
+        "noImplicitAny": true,
+        "forceConsistentCasingInFileNames": true,
+        "module": "esnext",
+        "moduleResolution": "node",
+        "resolveJsonModule": true,
+        "noUnusedLocals": true,
+        "noEmit": true,
+        "jsx": "preserve",
+        "allowJs": true,
+        "maxNodeModuleJsDepth": 10
+    },
+    "exclude": ["node_modules", "dist"]
+}
