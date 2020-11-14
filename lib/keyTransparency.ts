@@ -332,7 +332,7 @@ export async function verifyPublicKeys(
   return { code: VERIFY_PK_STATUS.VERIFY_PK_PASSED, error: "" };
 }
 
-export function getSignatureTime(signature: OpenPGPSignature): number {
+function getSignatureTime(signature: OpenPGPSignature): number {
   const packet = signature.packets.findPacket(2);
   if (!packet) {
     throw new Error("Signature contains no signature packet");

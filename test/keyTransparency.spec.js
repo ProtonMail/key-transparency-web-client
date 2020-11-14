@@ -1,41 +1,8 @@
-import { getSignature } from "pmcrypto";
 import { testEmail, keyList, skl, epoch, proof } from "./keyTransparency.data";
-import { verifyProof } from "../lib/merkleTree";
-import { verifyPublicKeys, getSignatureTime } from "../lib/keyTransparency";
-import {
-  parseCertificate,
-  checkAltName,
-  verifyLEcert,
-  verifySCT,
-} from "../lib/certTransparency";
+import { verifyPublicKeys } from "../lib/keyTransparency";
 import { VERIFY_PK_STATUS } from "../lib/constants";
 
 describe("key transparency", () => {
-  it("should verify a proof", async () => {
-    const { Name, Revision, Proof, Neighbors } = proof;
-    const { TreeHash } = epoch;
-    const { Data } = skl;
-
-    await verifyProof(
-      Name,
-      Revision,
-      Proof,
-      Neighbors,
-      TreeHash,
-      Data,
-      testEmail
-    );
-  });
-
-  it("should verify a certificate", async () => {
-    const { Certificate, ChainHash, EpochID } = epoch;
-
-    const cert = parseCertificate(Certificate);
-    checkAltName(cert, ChainHash, EpochID);
-    await verifyLEcert(cert);
-    await verifySCT(cert);
-  });
-
   it("should verify public keys (and fail when it checks the certificate returnedDate", async () => {
     const mockApi = (call) => {
       const splitCall = call.url.split("/");
@@ -95,12 +62,5 @@ describe("key transparency", () => {
     );
     expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
     expect(result.error).toEqual("");
-  });
-
-  it("should get signature time", async () => {
-    const { Signature } = skl;
-    const time = getSignatureTime(await getSignature(Signature));
-
-    expect(typeof time).toEqual("number");
   });
 });
