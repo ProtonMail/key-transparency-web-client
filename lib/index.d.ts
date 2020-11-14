@@ -1,6 +1,8 @@
 import { Api } from "./helpers/interfaces/Api";
 import { Key } from "./helpers/interfaces/Key";
 
+export const VERIFY_PK_STATUS: { [key: string]: number };
+
 export function ktSelfAudit(
   api: Api,
   userKey: Key
