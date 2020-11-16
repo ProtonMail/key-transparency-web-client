@@ -23,6 +23,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -33,11 +34,13 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Length mismatch found"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt initial byte", async () => {
@@ -45,6 +48,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -55,11 +59,13 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Proof decoding failed"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt name", async () => {
@@ -67,6 +73,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         `00${Name.slice(2, Name.length)}`,
@@ -77,11 +84,13 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Fetched name is different than name in proof"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt proof", async () => {
@@ -89,6 +98,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -99,11 +109,13 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Verification went through but failed"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt root hash", async () => {
@@ -111,6 +123,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -121,9 +134,11 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual("Hash chain does not result in TreeHash");
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt revision", async () => {
@@ -131,6 +146,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -141,9 +157,11 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual("Hash chain does not result in TreeHash");
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt skl", async () => {
@@ -151,6 +169,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -161,9 +180,11 @@ describe("merkle tree", () => {
         `00${Data.slice(2, Data.length)}`,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual("Hash chain does not result in TreeHash");
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt but matching names", async () => {
@@ -171,6 +192,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         `00${Name.slice(2, Name.length)}`,
@@ -181,11 +203,13 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Proof decoding failed"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt email", async () => {
@@ -193,6 +217,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -203,11 +228,13 @@ describe("merkle tree", () => {
         Data,
         "corrupt@protonmail.blue"
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual(
         'VRF verification failed with error "Verification went through but failed"'
       );
     }
+    expect(errorThrown).toEqual(true);
   });
 
   it("should fail with corrupt neighbors", async () => {
@@ -215,6 +242,7 @@ describe("merkle tree", () => {
     const { TreeHash } = epoch;
     const { Data } = skl;
 
+    let errorThrown = true;
     try {
       await verifyProof(
         Name,
@@ -228,8 +256,10 @@ describe("merkle tree", () => {
         Data,
         testEmail
       );
+      errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual("Hash chain does not result in TreeHash");
     }
+    expect(errorThrown).toEqual(true);
   });
 });
