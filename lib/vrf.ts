@@ -107,7 +107,7 @@ export async function vrfVerify(
   }
   const o = decodeProof(proof);
   if (!o) {
-    throw new Error("Proof decoding failed with error");
+    throw new Error("Proof decoding failed");
   }
   const P1 = OS2ECP(publicKey);
   if (!P1) {
