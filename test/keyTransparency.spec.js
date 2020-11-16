@@ -1,30 +1,71 @@
-import { testEmail, keyList, skl, epoch, proof } from "./keyTransparency.data";
+import {
+  testEmail,
+  keyList,
+  skl,
+  epoch,
+  epochOld,
+  proof,
+} from "./keyTransparency.data";
 import { verifyPublicKeys } from "../lib/keyTransparency";
 import { VERIFY_PK_STATUS } from "../lib/constants";
 
+const serverName = "https://protonmail.blue/api";
+
 describe("key transparency", () => {
-  it("should verify public keys (and fail when it checks the certificate returnedDate", async () => {
-    const mockApi = (call) => {
+  const mockAddress = {
+    Responses: [
+      {
+        Email: testEmail,
+        Response: { Code: 1000, CanonicalEmail: testEmail },
+      },
+    ],
+    Code: 1001,
+  };
+
+  const mockApi = (call) => {
+    const splitCall = call.url.split("/");
+    if (splitCall[0] === "addresses") {
+      return mockAddress;
+    }
+    if (splitCall[0] === "kt") {
+      if (splitCall.length > 3) {
+        return proof;
+      }
+      return epoch;
+    }
+  };
+
+  it("should verify public keys", async () => {
+    const mockApi = async (call) => {
       const splitCall = call.url.split("/");
       if (splitCall[0] === "addresses") {
-        return {
-          Responses: [
-            {
-              Email: testEmail,
-              Response: { Code: 1000, CanonicalEmail: testEmail },
-            },
-          ],
-          Code: 1001,
-        };
+        return mockAddress;
       }
       if (splitCall[0] === "kt") {
         if (splitCall.length > 3) {
           return proof;
         }
+
+        const response1 = await fetch(`${serverName}/kt/epochs`);
+        if (response1.ok) {
+          const epochInfo = await response1.json();
+          const response2 = await fetch(
+            `${serverName}/kt/epochs/${epochInfo.Epochs[0].EpochID}`
+          );
+          if (response2.ok) {
+            return response2.json();
+          }
+        }
         return epoch;
       }
     };
 
+    const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi);
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_PASSED);
+    expect(result.error).toEqual("");
+  });
+
+  it("should verify public keys and fail when it checks the certificate returnedDate", async () => {
     const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi);
     expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
     expect(result.error).toEqual(
@@ -33,27 +74,6 @@ describe("key transparency", () => {
   });
 
   it("should warn that public keys are too young to be verified", async () => {
-    const mockApi = (call) => {
-      const splitCall = call.url.split("/");
-      if (splitCall[0] === "addresses") {
-        return {
-          Responses: [
-            {
-              Email: testEmail,
-              Response: { Code: 1000, CanonicalEmail: testEmail },
-            },
-          ],
-          Code: 1001,
-        };
-      }
-      if (splitCall[0] === "kt") {
-        if (splitCall.length > 3) {
-          return proof;
-        }
-        return epoch;
-      }
-    };
-
     const result = await verifyPublicKeys(
       keyList,
       testEmail,
@@ -62,5 +82,66 @@ describe("key transparency", () => {
     );
     expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
     expect(result.error).toEqual("");
+  });
+
+  it("should fail with undefined canonizeEmail", async () => {
+    const mockApi = () => {
+      const corruptAddress = JSON.parse(JSON.stringify(mockAddress));
+      corruptAddress.Responses[0].Response.CanonicalEmail = undefined;
+      return corruptAddress;
+    };
+
+    const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi);
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.error).toEqual(`Failed to canonize email "${testEmail}"`);
+  });
+
+  it("should fail with no signed key list given", async () => {
+    const result = await verifyPublicKeys(keyList, testEmail, null, mockApi);
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.error).toEqual("Signed key list undefined");
+  });
+
+  it("should fail signature verification", async () => {
+    const result = await verifyPublicKeys(
+      keyList,
+      testEmail,
+      { ...skl, Data: `${skl.Data.slice(0, 12)}3${skl.Data.slice(13)}` },
+      mockApi
+    );
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.error).toEqual("Signature verification failed");
+  });
+
+  it("should fail signed key list check", async () => {
+    const result = await verifyPublicKeys(
+      [keyList[0]],
+      testEmail,
+      skl,
+      mockApi
+    );
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.error).toEqual(
+      "Mismatch found between key list and signed key list. Key list and signed key list have different lengths"
+    );
+  });
+
+  it("should fail epoch verification", async () => {
+    const mockApi = (call) => {
+      const splitCall = call.url.split("/");
+      if (splitCall[0] === "addresses") {
+        return mockAddress;
+      }
+      if (splitCall[0] === "kt") {
+        if (splitCall.length > 3) {
+          return proof;
+        }
+        return epochOld;
+      }
+    };
+
+    const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi);
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.error).toEqual("Hash chain does not result in TreeHash");
   });
 });

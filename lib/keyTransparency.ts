@@ -252,6 +252,13 @@ export async function verifyPublicKeys(
   },
   api: Api
 ): Promise<{ code: number; error: string }> {
+  if (!signedKeyList) {
+    return {
+      code: VERIFY_PK_STATUS.VERIFY_PK_FAILED,
+      error: "Signed key list undefined",
+    };
+  }
+
   let canonicalEmail: string | undefined;
   try {
     canonicalEmail = (await getCanonicalEmailMap([email], api))[email];
