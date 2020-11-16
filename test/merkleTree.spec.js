@@ -205,8 +205,11 @@ describe("merkle tree", () => {
       );
       errorThrown = false;
     } catch (err) {
-      expect(err.message).toEqual(
-        'VRF verification failed with error "Proof decoding failed"'
+      // NOTE: the error message in this case varies depending on the corruption, i.e. depending on the
+      // corrupt Name being parsable to an EC point by OS2ECP. If it is, then the error message will be
+      // "Verification went through but failed", if it isn't the errow will be "Proof decoding failed".
+      expect(err.message.substring(0, 36)).toEqual(
+        'VRF verification failed with error "'
       );
     }
     expect(errorThrown).toEqual(true);
@@ -230,8 +233,12 @@ describe("merkle tree", () => {
       );
       errorThrown = false;
     } catch (err) {
-      expect(err.message).toEqual(
-        'VRF verification failed with error "Verification went through but failed"'
+      // NOTE: the error message in this case varies depending on the corruption, i.e. depending on
+      // SHA256(email||pk|ctr) being parsable to an EC point by OS2ECP within the LIMIT constant.
+      // If it is, then the error message will be "Verification went through but failed", if it
+      // isn't the errow will be "Point generation failed".
+      expect(err.message.substring(0, 36)).toEqual(
+        'VRF verification failed with error "'
       );
     }
     expect(errorThrown).toEqual(true);
