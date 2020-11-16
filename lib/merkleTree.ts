@@ -27,13 +27,13 @@ export async function verifyProof(
   email: string
 ) {
   // Verify proof
-  const publicKey = Buffer.from(hexStringToArray(vrfHexKey));
-  const message = Buffer.from(binaryStringToArray(email));
+  const pkBuffer = Buffer.from(hexStringToArray(vrfHexKey));
+  const emailBuffer = Buffer.from(binaryStringToArray(email));
   const proofBuffer = Buffer.from(hexStringToArray(Proof));
   const valueBuffer = Buffer.from(hexStringToArray(Name));
 
   try {
-    await vrfVerify(publicKey, message, proofBuffer, valueBuffer);
+    await vrfVerify(pkBuffer, emailBuffer, proofBuffer, valueBuffer);
   } catch (err) {
     throw new Error(`VRF verification failed with error "${err.message}"`);
   }

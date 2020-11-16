@@ -7,28 +7,15 @@ type Point = elliptic.curve.base.BasePoint;
 const EDDSA = new elliptic.eddsa("ed25519");
 /* eslint-enable new-cap */
 const N2 = 32;
+const PROOF_SIZE = 48;
 const N = N2 / 2;
 const G = EDDSA.curve.g as Point;
 const LIMIT = 100;
 const CO_FACTOR = 8;
 
-function proofToHash(proof: Buffer) {
-  return proof.slice(1, N2 + 1);
-}
-
-function checkHash(proof: Buffer, value: Buffer) {
-  if (value.length === N2 && proof.length > N2 + 1) {
-    if (value.equals(proofToHash(proof))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function OS2ECP(os: Buffer) {
-  const b = elliptic.utils.toArray(os, 16);
   try {
-    return EDDSA.decodePoint(b) as Point;
+    return EDDSA.decodePoint(elliptic.utils.toArray(os, 16)) as Point;
   } catch (e) {
     return null;
   }
@@ -69,13 +56,13 @@ function decodeProof(proof: Buffer) {
   return { r, c: OS2IP(c), s: OS2IP(s) };
 }
 
-async function hashToCurve(message: Buffer, publicKey: Buffer): Promise<any> {
+async function hashToCurve(email: Buffer, publicKey: Buffer): Promise<any> {
   for (let i = 0; i < LIMIT; i++) {
     const ctr = I2OSP(new BN(i), 4);
     const digest = Buffer.from(
       await SHA256(
         concatArrays([
-          new Uint8Array(message),
+          new Uint8Array(email),
           new Uint8Array(publicKey),
           new Uint8Array(ctr),
         ])
@@ -104,23 +91,33 @@ async function hashPoints(...args: Point[]) {
 
 export async function vrfVerify(
   publicKey: Buffer,
-  message: Buffer,
+  email: Buffer,
   proof: Buffer,
   value: Buffer
 ) {
-  if (!checkHash(proof, value)) {
+  if (
+    proof.length !== N2 + PROOF_SIZE + 1 ||
+    value.length !== N2 ||
+    publicKey.length !== N2
+  ) {
+    throw new Error("Length mismatch found");
+  }
+  if (!value.equals(proof.slice(1, N2 + 1))) {
     throw new Error("Fetched name is different than name in proof");
   }
   const o = decodeProof(proof);
   if (!o) {
-    throw new Error("Proof decoding failed");
+    throw new Error("Proof decoding failed with error");
   }
   const P1 = OS2ECP(publicKey);
   if (!P1) {
     throw new Error("VRF public key parsing failed");
   }
   const u = P1.mul(o.c).add(G.mul(o.s));
-  const h = await hashToCurve(message, publicKey);
+  const h = await hashToCurve(email, publicKey);
+  if (!h) {
+    throw new Error("Point generation failed");
+  }
   const v = o.r.mul(o.c).add(h.mul(o.s));
   const c = await hashPoints(G, h, P1, o.r, u, v);
   if (!c.eq(o.c)) {
