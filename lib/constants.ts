@@ -1,7 +1,7 @@
-export const VERIFY_PK_STATUS: { [key: string]: number } = {
-  VERIFY_PK_FAILED: 0,
-  VERIFY_PK_PASSED: 1,
-  VERIFY_PK_WARNING: 2,
+export const KT_STATUS: { [key: string]: number } = {
+  KT_FAILED: 0,
+  KT_PASSED: 1,
+  KT_WARNING: 2,
 };
 
 export const vrfHexKey =

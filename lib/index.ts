@@ -1,2 +1,3 @@
 export { ktSelfAudit, updateKT, verifyPublicKeys } from "./keyTransparency";
-export { VERIFY_PK_STATUS } from "./constants";
+export { KT_STATUS } from "./constants";
+export { Epoch, EpochExtended } from "./helpers/interfaces/Epoch";
