@@ -14,7 +14,8 @@ import {
 } from "pmcrypto";
 import Certificate from "pkijs/src/Certificate";
 import { Api } from "./helpers/interfaces/Api";
-import { Key } from "./helpers/interfaces/Key";
+import { Address } from "./helpers/interfaces/Address";
+import { CachedKey } from "./helpers/interfaces/CachedKey";
 import { SignedKeyListInfo } from "./helpers/interfaces/SignedKeyList";
 import {
   getProof,
@@ -22,7 +23,6 @@ import {
   getLatestVerifiedEpoch,
   uploadVerifiedEpoch,
 } from "./helpers/api/keyTransparency";
-import { queryAddresses } from "./helpers/api/addresses";
 import { getSignedKeyLists, updateSignedKeyList } from "./helpers/api/keys";
 import { getItem, setItem, removeItem, hasStorage } from "./helpers/storage";
 import { getCanonicalEmailMap } from "./helpers/api/canonicalEmailMap";
@@ -388,7 +388,8 @@ async function getParsedSignedKeyLists(
 
 export async function ktSelfAudit(
   api: Api,
-  userKey: Key
+  addresses: Address[],
+  userKeys: CachedKey[]
 ): Promise<
   Map<
     string,
@@ -402,27 +403,25 @@ export async function ktSelfAudit(
     }
   >
 > {
-  const addresses: {
-    ID: string;
-    Email: string;
-    SignedKeyList: SignedKeyListInfo;
-    Keys: {
-      ID: string;
-      Primary: number;
-      Flags: number;
-      PublicKey: string;
-      PrivateKey: string;
-    }[];
-  }[] = await api(queryAddresses());
-
-  if (addresses.length === 0) {
-    throw new Error("No addresses to audit");
-  }
-
   const addressesToVerifiedEpochs = new Map();
   const canonicalEmailMap = await getCanonicalEmailMap(
     addresses.map((address) => address.Email),
     api
+  );
+
+  const userPrivateKeys = await Promise.all(
+    userKeys
+      .filter((cachedKey) => cachedKey.error === undefined)
+      .map(async (cachedKey) => {
+        if (!cachedKey.privateKey) {
+          try {
+            [cachedKey.privateKey] = await getKeys(cachedKey.Key.PrivateKey);
+          } catch (err) {
+            throw new Error("Parsing private key not possible");
+          }
+        }
+        return cachedKey.privateKey;
+      })
   );
 
   for (let i = 0; i < addresses.length; i++) {
@@ -434,7 +433,10 @@ export async function ktSelfAudit(
 
     // Parse key lists
     const { signedKeyListData, parsedKeyList } = await parseKeyLists(
-      address.Keys,
+      address.Keys.map((key) => ({
+        Flags: key.Flags!,
+        PublicKey: key.PublicKey,
+      })),
       address.SignedKeyList.Data
     );
 
@@ -446,7 +448,7 @@ export async function ktSelfAudit(
           (
             await decryptMessage({
               message: await getMessage(ktBlob),
-              privateKeys: await getKeys(userKey.PrivateKey),
+              privateKeys: userPrivateKeys,
             })
           ).data
         );
@@ -732,33 +734,18 @@ export async function ktSelfAudit(
 }
 
 export async function updateKT(
-  address: {
-    ID: string;
-    Email: string;
-    SignedKeyList: {
-      MaxEpochID: number;
-      MinEpochID: number;
-      Data: string;
-      Signature: string;
-    };
-    Keys: {
-      ID: string;
-      Primary: number;
-      Flags: number;
-      PublicKey: string;
-      PrivateKey: string;
-    }[];
-  },
+  address: Address,
   api: Api,
-  userKey: Key
+  userKeys: CachedKey[]
 ): Promise<void> {
   // const expectedEpochInterval = 4 * 60 * 60 * 1000;
   // TODO: 1, this should be checked against some sort of flag that selfaudit saves, say, the component state
 
   let addressesToVerifiedEpochs;
   try {
-    // TODO: this result should be taken from, say, the component's state rather than from calling selfaudit
-    addressesToVerifiedEpochs = await ktSelfAudit(api, userKey);
+    // TODO: this result should be taken from, say, the component's state rather than from calling selfaudit.
+    // Also, [address] is only a temporary fix.
+    addressesToVerifiedEpochs = await ktSelfAudit(api, [address], userKeys);
   } catch (error) {
     throw new Error(`Self audit failed with error "${error.message}"`);
   }
@@ -798,12 +785,29 @@ export async function updateKT(
   });
 
   if (hasStorage()) {
+    const userPrimaryPublicKey = await Promise.all(
+      userKeys
+        .filter((cachedKey) => {
+          return cachedKey.error === undefined && cachedKey.Key.Primary === 1;
+        })
+        .map(async (cachedKey) => {
+          if (!cachedKey.publicKey) {
+            try {
+              [cachedKey.publicKey] = await getKeys(cachedKey.Key.PublicKey);
+            } catch (err) {
+              throw new Error("Parsing private key not possible");
+            }
+          }
+          return cachedKey.publicKey;
+        })
+    );
+
     const err = setItem(
       `kt:${address.ID}`,
       (
         await encryptMessage({
           data: message,
-          publicKeys: await getKeys(userKey.PublicKey),
+          publicKeys: userPrimaryPublicKey,
         })
       ).data
     );

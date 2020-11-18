@@ -1,11 +1,19 @@
 import { Api } from "../interfaces/Api";
 import { SimpleMap } from "../interfaces/utils";
-import { getCanonicalAddresses } from "./addresses";
 
 enum API_CODES {
   GLOBAL_SUCCESS = 1001,
   SINGLE_SUCCESS = 1000,
 }
+
+const getCanonicalAddresses = (Emails: string[]) => ({
+  // params doesn't work correctly so
+  url: `addresses/canonical?${Emails.map((email) => `Emails[]=${email}`).join(
+    "&"
+  )}`,
+  method: "get",
+  // params: { Emails },
+});
 
 interface GetCanonicalAddressesResponses {
   Email: string;
