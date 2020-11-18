@@ -1,5 +1,5 @@
-import { testEmail, skl, epoch, proof } from "./keyTransparency.data";
-import { verifyProof } from "../lib/merkleTree";
+import { testEmail, skl, epoch, epochOld, proof } from "./keyTransparency.data";
+import { verifyProof, verifyChainHash } from "../lib/merkleTree";
 
 describe("merkle tree", () => {
   it("should verify a proof", async () => {
@@ -266,6 +266,37 @@ describe("merkle tree", () => {
       errorThrown = false;
     } catch (err) {
       expect(err.message).toEqual("Hash chain does not result in TreeHash");
+    }
+    expect(errorThrown).toEqual(true);
+  });
+
+  it("should verify chain hash consistency", async () => {
+    const { TreeHash, ChainHash, PreviousChainHash } = epoch;
+    const {
+      TreeHash: TreeHashOld,
+      ChainHash: ChainHashOld,
+      PreviousChainHash: PreviousChainHashOld,
+    } = epochOld;
+
+    await verifyChainHash(TreeHash, PreviousChainHash, ChainHash);
+    await verifyChainHash(TreeHashOld, PreviousChainHashOld, ChainHashOld);
+  });
+
+  it("should fail chain hash consistency", async () => {
+    const { TreeHash, ChainHash, PreviousChainHash } = epoch;
+
+    let errorThrown = true;
+    try {
+      await verifyChainHash(
+        TreeHash,
+        PreviousChainHash,
+        `0${ChainHash.slice(1)}`
+      );
+      errorThrown = false;
+    } catch (err) {
+      expect(err.message).toEqual(
+        "Chain hash of fetched epoch is not consistent"
+      );
     }
     expect(errorThrown).toEqual(true);
   });

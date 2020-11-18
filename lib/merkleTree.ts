@@ -17,6 +17,21 @@ function hexStringToArray(hex: string): Uint8Array {
   return result;
 }
 
+export async function verifyChainHash(
+  TreeHash: string,
+  PreviousChainHash: string,
+  ChainHash: string
+) {
+  if (
+    ChainHash !==
+    arrayToHexString(
+      await SHA256(hexStringToArray(`${PreviousChainHash}${TreeHash}`))
+    )
+  ) {
+    throw new Error("Chain hash of fetched epoch is not consistent");
+  }
+}
+
 export async function verifyProof(
   Name: string,
   Revision: number,

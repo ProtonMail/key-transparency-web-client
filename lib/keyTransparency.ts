@@ -15,6 +15,7 @@ import {
 import Certificate from "pkijs/src/Certificate";
 import { Api } from "./helpers/interfaces/Api";
 import { Key } from "./helpers/interfaces/Key";
+import { SignedKeyListInfo } from "./helpers/interfaces/SignedKeyList";
 import {
   getProof,
   getCertificate,
@@ -31,7 +32,7 @@ import {
   verifyLEcert,
   verifySCT,
 } from "./certTransparency";
-import { verifyProof } from "./merkleTree";
+import { verifyProof, verifyChainHash } from "./merkleTree";
 import { VERIFY_PK_STATUS } from "./constants";
 
 const maximumEpochInterval = 24 * 60 * 60 * 1000;
@@ -244,17 +245,12 @@ export async function verifyPublicKeys(
     PublicKey: string;
   }[],
   email: string,
-  signedKeyList: {
-    MinEpochID: number;
-    MaxEpochID: number;
-    Data: string;
-    Signature: string;
-  },
+  signedKeyList: SignedKeyListInfo | undefined,
   api: Api
 ): Promise<{ code: number; error: string }> {
   if (!signedKeyList) {
     return {
-      code: VERIFY_PK_STATUS.VERIFY_PK_FAILED,
+      code: VERIFY_PK_STATUS.VERIFY_PK_WARNING,
       error: "Signed key list undefined",
     };
   }
@@ -300,7 +296,11 @@ export async function verifyPublicKeys(
 
   // If signedKeyList is (allegedly) too young, users is warned and verification cannot continue
   if (signedKeyList.MaxEpochID === null) {
-    return { code: VERIFY_PK_STATUS.VERIFY_PK_WARNING, error: "" };
+    return {
+      code: VERIFY_PK_STATUS.VERIFY_PK_WARNING,
+      error:
+        "The keys were generated too recently to be included in key transparency",
+    };
   }
 
   // Verify latest epoch
@@ -310,9 +310,22 @@ export async function verifyPublicKeys(
     ChainHash: string;
     Certificate: string;
     IssuerKeyHash: string;
+    PreviousChainHash: string;
   };
   try {
     maxEpoch = await api(getCertificate({ EpochID: signedKeyList.MaxEpochID }));
+  } catch (err) {
+    return { code: VERIFY_PK_STATUS.VERIFY_PK_FAILED, error: err.message };
+  }
+
+  try {
+    if (maxEpoch.PreviousChainHash) {
+      await verifyChainHash(
+        maxEpoch.TreeHash,
+        maxEpoch.PreviousChainHash,
+        maxEpoch.ChainHash
+      );
+    }
   } catch (err) {
     return { code: VERIFY_PK_STATUS.VERIFY_PK_FAILED, error: err.message };
   }
@@ -392,12 +405,7 @@ export async function ktSelfAudit(
   const addresses: {
     ID: string;
     Email: string;
-    SignedKeyList: {
-      MaxEpochID: number;
-      MinEpochID: number;
-      Data: string;
-      Signature: string;
-    };
+    SignedKeyList: SignedKeyListInfo;
     Keys: {
       ID: string;
       Primary: number;
@@ -458,12 +466,7 @@ export async function ktSelfAudit(
 
       const localSignature = await getSignature(localSKL.Signature);
 
-      const includedSKLarray: {
-        MaxEpochID: number;
-        MinEpochID: number;
-        Data: string;
-        Signature: string;
-      }[] = await Promise.all(
+      const includedSKLarray: SignedKeyListInfo[] = await Promise.all(
         fetchedSKLs.filter(async (skl) => {
           const sklSignature = await getSignature(skl.Signature);
           return (
@@ -654,8 +657,8 @@ export async function ktSelfAudit(
       }
 
       const includedSKL =
-        (address.SignedKeyList.MinEpochID > epoch.EpochID && previousSKL) ||
-        address.SignedKeyList.MinEpochID === null
+        address.SignedKeyList.MinEpochID === null ||
+        (address.SignedKeyList.MinEpochID > epoch.EpochID && previousSKL)
           ? previousSKL
           : address.SignedKeyList;
 
@@ -679,9 +682,10 @@ export async function ktSelfAudit(
       }
 
       if (
-        address.SignedKeyList.MinEpochID > epoch.EpochID &&
-        epoch.CertificateDate >
-          getSignatureTime(signatureSKL) + maximumEpochInterval
+        address.SignedKeyList.MinEpochID === null ||
+        (address.SignedKeyList.MinEpochID > epoch.EpochID &&
+          epoch.CertificateDate >
+            getSignatureTime(signatureSKL) + maximumEpochInterval)
       ) {
         throw new Error(
           "The certificate date is older than signed key list's signature by more than maximumEpochInterval"

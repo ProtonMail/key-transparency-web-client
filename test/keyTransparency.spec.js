@@ -87,7 +87,9 @@ describe("key transparency", () => {
       mockApi(epoch, mockAddress)
     );
     expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
-    expect(result.error).toEqual("");
+    expect(result.error).toEqual(
+      "The keys were generated too recently to be included in key transparency"
+    );
   });
 
   it("should fail with undefined canonizeEmail", async () => {
@@ -111,7 +113,7 @@ describe("key transparency", () => {
       null,
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
     expect(result.error).toEqual("Signed key list undefined");
   });
 
