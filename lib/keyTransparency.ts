@@ -16,7 +16,8 @@ import Certificate from "pkijs/src/Certificate";
 import { Api } from "./helpers/interfaces/Api";
 import { Address } from "./helpers/interfaces/Address";
 import { CachedKey } from "./helpers/interfaces/CachedKey";
-import { SignedKeyListInfo } from "./helpers/interfaces/SignedKeyList";
+import { Epoch, EpochExtended } from "./helpers/interfaces/Epoch";
+import { SignedKeyListInfo, KeyInfo } from "./helpers/interfaces/SignedKeyList";
 import {
   getProof,
   getCertificate,
@@ -37,20 +38,7 @@ import { VERIFY_PK_STATUS } from "./constants";
 
 const maximumEpochInterval = 24 * 60 * 60 * 1000;
 
-function compareKeyInfo(
-  keyInfo: {
-    Fingerprint: string;
-    SHA256Fingerprints: string[];
-    Primary: number;
-    Flags: number;
-  },
-  sklKeyInfo: {
-    Fingerprint: string;
-    SHA256Fingerprints: string[];
-    Primary: number;
-    Flags: number;
-  }
-) {
+function compareKeyInfo(keyInfo: KeyInfo, sklKeyInfo: KeyInfo) {
   // Check fingerprints
   if (keyInfo.Fingerprint !== sklKeyInfo.Fingerprint) {
     throw new Error("Fingerprints");
@@ -84,12 +72,7 @@ async function verifyKeyLists(
     Flags: number;
     PublicKey: OpenPGPKey;
   }[],
-  signedKeyListData: {
-    Fingerprint: string;
-    SHA256Fingerprints: string[];
-    Primary: number;
-    Flags: number;
-  }[]
+  signedKeyListData: KeyInfo[]
 ) {
   // Check arrays validity
   if (keyList.length === 0) {
@@ -140,13 +123,7 @@ async function verifyKeyLists(
 }
 
 async function verifyEpoch(
-  epoch: {
-    EpochID: number;
-    TreeHash: string;
-    ChainHash: string;
-    Certificate: string;
-    IssuerKeyHash: string;
-  },
+  epoch: Epoch,
   email: string,
   signedKeyListArmored: string,
   api: Api
@@ -203,12 +180,7 @@ async function parseKeyLists(
   }[],
   signedKeyListData: string
 ): Promise<{
-  signedKeyListData: {
-    Fingerprint: string;
-    SHA256Fingerprints: string[];
-    Primary: number;
-    Flags: number;
-  }[];
+  signedKeyListData: KeyInfo[];
   parsedKeyList: { Flags: number; PublicKey: OpenPGPKey }[];
 }> {
   return {
@@ -304,14 +276,7 @@ export async function verifyPublicKeys(
   }
 
   // Verify latest epoch
-  let maxEpoch: {
-    EpochID: number;
-    TreeHash: string;
-    ChainHash: string;
-    Certificate: string;
-    IssuerKeyHash: string;
-    PreviousChainHash: string;
-  };
+  let maxEpoch: Epoch;
   try {
     maxEpoch = await api(getCertificate({ EpochID: signedKeyList.MaxEpochID }));
   } catch (err) {
@@ -365,16 +330,9 @@ async function getParsedSignedKeyLists(
   epochID: number,
   email: string,
   includeLastExpired: boolean
-): Promise<
-  { MaxEpochID: number; MinEpochID: number; Data: string; Signature: string }[]
-> {
+): Promise<SignedKeyListInfo[]> {
   const fetchedSKLs: {
-    SignedKeyLists: {
-      MaxEpochID: number;
-      MinEpochID: number;
-      Data: string;
-      Signature: string;
-    }[];
+    SignedKeyLists: SignedKeyListInfo[];
   } = await api(getSignedKeyLists({ SinceEpochID: epochID, Email: email }));
   /*
     fetchedSKLs.SignedKeyLists contains:
@@ -390,19 +348,7 @@ export async function ktSelfAudit(
   api: Api,
   addresses: Address[],
   userKeys: CachedKey[]
-): Promise<
-  Map<
-    string,
-    {
-      EpochID: number;
-      TreeHash: string;
-      ChainHash: string;
-      Certificate: string;
-      IssuerKeyHash: string;
-      CertificateDate: number;
-    }
-  >
-> {
+): Promise<Map<string, EpochExtended>> {
   const addressesToVerifiedEpochs = new Map();
   const canonicalEmailMap = await getCanonicalEmailMap(
     addresses.map((address) => address.Email),
@@ -503,13 +449,9 @@ export async function ktSelfAudit(
       );
 
       if (includedSKL.MinEpochID !== null) {
-        const minEpoch: {
-          EpochID: number;
-          TreeHash: string;
-          ChainHash: string;
-          Certificate: string;
-          IssuerKeyHash: string;
-        } = await api(getCertificate({ EpochID: includedSKL.MinEpochID }));
+        const minEpoch: Epoch = await api(
+          getCertificate({ EpochID: includedSKL.MinEpochID })
+        );
 
         const returnedDate = await verifyEpoch(
           minEpoch,
@@ -592,17 +534,13 @@ export async function ktSelfAudit(
 
     // The epochs are fetched according to when SKLs changed. There could be at most one such that MinEpochID is null.
     // That's excluded because it does not belong to any epoch.
-    const newerEpochs = await Promise.all(
+    const newerEpochs: EpochExtended[] = await Promise.all(
       newerSKLs
         .filter((skl) => skl.MinEpochID !== null)
         .map(async (skl) => {
-          const epoch: {
-            EpochID: number;
-            TreeHash: string;
-            ChainHash: string;
-            Certificate: string;
-            IssuerKeyHash: string;
-          } = await api(getCertificate({ EpochID: skl.MinEpochID }));
+          const epoch: Epoch = await api(
+            getCertificate({ EpochID: skl.MinEpochID! })
+          );
 
           const { Revision }: { Revision: number } = await api(
             getProof({ EpochID: epoch.EpochID, Email: email })
@@ -635,7 +573,7 @@ export async function ktSelfAudit(
       if (!newestEpoch) {
         throw new Error("Newest epoch is undefined");
       }
-      addressesToVerifiedEpochs.set(address.ID, newestEpoch.MaxEpochID);
+      addressesToVerifiedEpochs.set(address.ID, newestEpoch);
       continue;
     }
 
