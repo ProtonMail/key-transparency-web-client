@@ -11,3 +11,10 @@ export interface EpochExtended extends Epoch {
   Revision: number;
   CertificateDate: number;
 }
+
+export interface KeyInfo {
+  Fingerprint: string;
+  SHA256Fingerprints: string[];
+  Primary: number;
+  Flags: number;
+}
