@@ -153,7 +153,7 @@ async function verifyEpoch(epoch: Epoch, email: string, signedKeyListArmored: st
 
 async function parseKeyLists(
     keyList: {
-        Flags: number;
+        Flags: number | undefined;
         PublicKey: string;
     }[],
     signedKeyListData: string
@@ -166,7 +166,7 @@ async function parseKeyLists(
         parsedKeyList: await Promise.all(
             keyList.map(async (key) => {
                 return {
-                    Flags: key.Flags,
+                    Flags: key.Flags ? key.Flags : 0,
                     PublicKey: (await getKeys(key.PublicKey))[0],
                 };
             })
@@ -368,7 +368,7 @@ export async function ktSelfAudit(
         // Parse key lists
         const { signedKeyListData, parsedKeyList } = await parseKeyLists(
             address.Keys.map((key) => ({
-                Flags: key.Flags!,
+                Flags: key.Flags,
                 PublicKey: key.PublicKey,
             })),
             address.SignedKeyList.Data
@@ -609,7 +609,7 @@ export async function ktSelfAudit(
             newerSKLs
                 .filter((skl) => skl.MinEpochID !== null)
                 .map(async (skl) => {
-                    const epoch: Epoch = await api(getCertificate({ EpochID: skl.MinEpochID! }));
+                    const epoch: Epoch = await api(getCertificate({ EpochID: skl.MinEpochID as number }));
 
                     const { Revision }: { Revision: number } = await api(
                         getProof({ EpochID: epoch.EpochID, Email: email })
@@ -743,9 +743,9 @@ export async function ktSelfAudit(
                 CertificateDate: epochToUpload.CertificateDate,
             });
 
-            const [privateKey] = addresses
-                .find((address) => address.ID === addressID)!
-                .Keys.map((key) => key.PrivateKey);
+            const [privateKey] = (addresses.find((address) => address.ID === addressID) as Address).Keys.map(
+                (key) => key.PrivateKey
+            );
             await api(
                 uploadVerifiedEpoch({
                     AddressID: addressID,
