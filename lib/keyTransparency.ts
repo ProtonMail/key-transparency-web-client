@@ -138,6 +138,21 @@ async function verifyEpoch(
     email
   );
 
+  // Verify ChainHash
+  let previousChainHash =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+  if (epoch.EpochID !== 1) {
+    if (!epoch.PreviousChainHash) {
+      const { ChainHash } = await api(
+        getCertificate({ EpochID: epoch.EpochID - 1 })
+      );
+      previousChainHash = ChainHash;
+    } else {
+      previousChainHash = epoch.PreviousChainHash;
+    }
+  }
+  await verifyChainHash(epoch.TreeHash, previousChainHash, epoch.ChainHash);
+
   // Parse and verify certificate
   let certificate: Certificate;
   try {
@@ -275,28 +290,6 @@ export async function verifyPublicKeys(
   let maxEpoch: Epoch;
   try {
     maxEpoch = await api(getCertificate({ EpochID: signedKeyList.MaxEpochID }));
-  } catch (err) {
-    return { code: KT_STATUS.KT_FAILED, error: err.message };
-  }
-
-  try {
-    let previousChainHash =
-      "0000000000000000000000000000000000000000000000000000000000000000";
-    if (maxEpoch.EpochID !== 1) {
-      if (!maxEpoch.PreviousChainHash) {
-        const { ChainHash } = await api(
-          getCertificate({ EpochID: maxEpoch.EpochID - 1 })
-        );
-        previousChainHash = ChainHash;
-      } else {
-        previousChainHash = maxEpoch.PreviousChainHash;
-      }
-    }
-    await verifyChainHash(
-      maxEpoch.TreeHash,
-      previousChainHash,
-      maxEpoch.ChainHash
-    );
   } catch (err) {
     return { code: KT_STATUS.KT_FAILED, error: err.message };
   }
@@ -584,8 +577,67 @@ export async function ktSelfAudit(
     }
     if (!verifiedEpoch && errorResponse === "Unprocessable Entity") {
       if (address.SignedKeyList.MinEpochID === null) {
-        // Do something
+        addressesToVerifiedEpochs.set(address.ID, {
+          code: KT_STATUS.KT_WARNING,
+          error:
+            "Signed key list has not been included in any epoch yet, self-audit is postponed",
+        });
+        continue;
       }
+
+      // Verify current epoch
+      let currentEpoch: Epoch;
+      try {
+        currentEpoch = await api(
+          getCertificate({
+            EpochID: address.SignedKeyList.MaxEpochID as number,
+          })
+        );
+      } catch (err) {
+        addressesToVerifiedEpochs.set(address.ID, {
+          code: KT_STATUS.KT_FAILED,
+          error: "Cannot fetch current epoch",
+        });
+        continue;
+      }
+
+      let returnedDate: number;
+      try {
+        returnedDate = await verifyEpoch(
+          currentEpoch,
+          email,
+          address.SignedKeyList.Data,
+          api
+        );
+      } catch (err) {
+        addressesToVerifiedEpochs.set(address.ID, {
+          code: KT_STATUS.KT_FAILED,
+          error: err.message,
+        });
+        continue;
+      }
+
+      if (Date.now() - returnedDate > maximumEpochInterval) {
+        addressesToVerifiedEpochs.set(address.ID, {
+          code: KT_STATUS.KT_FAILED,
+          error: "Returned date is older than the maximum epoch interval",
+        });
+        continue;
+      }
+
+      const { Revision }: { Revision: number } = await api(
+        getProof({ EpochID: currentEpoch.EpochID, Email: email })
+      );
+      addressesToVerifiedEpochs.set(address.ID, {
+        code: KT_STATUS.KT_PASSED,
+        verifiedEpoch: {
+          ...currentEpoch,
+          Revision,
+          CertificateDate: returnedDate,
+        } as EpochExtended,
+        error: "",
+      });
+      continue;
     }
     verifiedEpoch = verifiedEpoch as { Data: string; Signature: string };
 
