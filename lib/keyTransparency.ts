@@ -16,8 +16,8 @@ import Certificate from "pkijs/src/Certificate";
 import { Api } from "./helpers/interfaces/Api";
 import { Address } from "./helpers/interfaces/Address";
 import { CachedKey } from "./helpers/interfaces/CachedKey";
-import { Epoch, EpochExtended } from "./helpers/interfaces/Epoch";
-import { SignedKeyListInfo, KeyInfo } from "./helpers/interfaces/SignedKeyList";
+import { Epoch, EpochExtended, KeyInfo } from "./interfaces";
+import { SignedKeyListInfo } from "./helpers/interfaces/SignedKeyList";
 import {
   getProof,
   getCertificate,
@@ -114,11 +114,7 @@ async function verifyKeyLists(
 
   // Check keys
   keyListInfo.forEach((key, i) => {
-    try {
-      compareKeyInfo(key, signedKeyListInfo[i]);
-    } catch (error) {
-      throw new Error(`Key info mismatch: ${error.message}`);
-    }
+    compareKeyInfo(key, signedKeyListInfo[i]);
   });
 }
 
@@ -284,13 +280,23 @@ export async function verifyPublicKeys(
   }
 
   try {
-    if (maxEpoch.PreviousChainHash) {
-      await verifyChainHash(
-        maxEpoch.TreeHash,
-        maxEpoch.PreviousChainHash,
-        maxEpoch.ChainHash
-      );
+    let previousChainHash =
+      "0000000000000000000000000000000000000000000000000000000000000000";
+    if (maxEpoch.EpochID !== 1) {
+      if (!maxEpoch.PreviousChainHash) {
+        const { ChainHash } = await api(
+          getCertificate({ EpochID: maxEpoch.EpochID - 1 })
+        );
+        previousChainHash = ChainHash;
+      } else {
+        previousChainHash = maxEpoch.PreviousChainHash;
+      }
     }
+    await verifyChainHash(
+      maxEpoch.TreeHash,
+      previousChainHash,
+      maxEpoch.ChainHash
+    );
   } catch (err) {
     return { code: KT_STATUS.KT_FAILED, error: err.message };
   }
@@ -348,20 +354,25 @@ export async function ktSelfAudit(
   api: Api,
   addresses: Address[],
   userKeys: CachedKey[]
-): Promise<{
-  code: number;
-  verifiedEpochsMap: Map<string, EpochExtended>;
-  error: string;
-}> {
+): Promise<
+  Map<
+    string,
+    {
+      code: number;
+      verifiedEpochsMap?: EpochExtended;
+      error: string;
+    }
+  >
+> {
   const addressesToVerifiedEpochs = new Map();
   const canonicalEmailMap = await getCanonicalEmailMap(
     addresses.map((address) => address.Email),
     api
   );
 
-  const userPrivateKeys = await Promise.all(
-    userKeys
-      .map(async (cachedKey) => {
+  const userPrivateKeys = (
+    await Promise.all(
+      userKeys.map(async (cachedKey) => {
         if (cachedKey.error) {
           return;
         }
@@ -374,32 +385,20 @@ export async function ktSelfAudit(
         }
         return cachedKey.privateKey;
       })
-      .filter(
-        (
-          privateKey: Promise<OpenPGPKey | undefined>
-        ): privateKey is Promise<OpenPGPKey> => {
-          return privateKey !== undefined;
-        }
-      )
-  );
-
-  if (userPrivateKeys.length === 0) {
-    return {
-      code: KT_STATUS.KT_FAILED,
-      verifiedEpochsMap: new Map(),
-      error: "No user private key found",
-    };
-  }
+    )
+  ).filter((privateKey: OpenPGPKey | undefined): privateKey is OpenPGPKey => {
+    return privateKey !== undefined;
+  });
 
   for (let i = 0; i < addresses.length; i++) {
     const address = addresses[i];
     const email = canonicalEmailMap[address.Email];
     if (!email) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: `Failed to canonize email ${address.Email}`,
-      };
+      });
+      continue;
     }
 
     // Parse key lists
@@ -424,11 +423,11 @@ export async function ktSelfAudit(
           ).data
         );
       } catch (error) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: `Decrytption of ktBlob in localStorage failed with error "${error.message}"`,
-        };
+        });
+        continue;
       }
 
       const localSKL = decryptedBlob.SignedKeyList;
@@ -456,11 +455,11 @@ export async function ktSelfAudit(
       const includedSKL = includedSKLarray.shift();
 
       if (!includedSKL) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Included signed key list not found",
-        };
+        });
+        continue;
       }
 
       const includedSignature = await getSignature(includedSKL.Signature);
@@ -469,12 +468,12 @@ export async function ktSelfAudit(
         getSignatureTime(includedSignature) - getSignatureTime(localSignature) >
         maximumEpochInterval
       ) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error:
             "Signed key list in localStorage is older than included signed key list by more than maximumEpochInterval",
-        };
+        });
+        continue;
       }
 
       // Check signature
@@ -485,11 +484,11 @@ export async function ktSelfAudit(
           includedSKL.Signature
         );
       } catch (err) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: err.message,
-        };
+        });
+        continue;
       }
 
       if (includedSKL.MinEpochID !== null) {
@@ -508,32 +507,32 @@ export async function ktSelfAudit(
           returnedDate - getSignatureTime(localSignature) >
           maximumEpochInterval
         ) {
-          return {
+          addressesToVerifiedEpochs.set(address.ID, {
             code: KT_STATUS.KT_FAILED,
-            verifiedEpochsMap: new Map(),
             error:
               "Returned date is older than the signed key list in localStorage by more than maximumEpochInterval",
-          };
+          });
+          continue;
         }
 
         const err = removeItem(`kt:${address.ID}`);
         if (!err) {
-          return {
+          addressesToVerifiedEpochs.set(address.ID, {
             code: KT_STATUS.KT_FAILED,
-            verifiedEpochsMap: new Map(),
             error: "Removing from localStorage failed",
-          };
+          });
+          continue;
         }
       } else if (
         Date.now() - getSignatureTime(localSignature) >
         maximumEpochInterval
       ) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error:
             "Signed key list in localStorage is older than maximumEpochInterval",
-        };
+        });
+        continue;
       }
     }
 
@@ -541,11 +540,11 @@ export async function ktSelfAudit(
     try {
       await verifyKeyLists(parsedKeyList, signedKeyListData);
     } catch (error) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: `Mismatch found between key list and signed key list. ${error.message}`,
-      };
+      });
+      continue;
     }
 
     // Check signature
@@ -556,29 +555,39 @@ export async function ktSelfAudit(
         address.SignedKeyList.Signature
       );
     } catch (err) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: err.message,
-      };
+      });
+      continue;
     }
 
     const signatureSKL = await getSignature(address.SignedKeyList.Signature);
     if (address.SignedKeyList.MinEpochID === null) {
       if (Date.now() - getSignatureTime(signatureSKL) > maximumEpochInterval) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Signed key list is older than maximumEpochInterval",
-        };
+        });
+        continue;
       }
     }
 
-    // TODO: first timers won't have a verified epoch.
-    const verifiedEpoch: {
-      Data: string;
-      Signature: string;
-    } = await api(getLatestVerifiedEpoch({ AddressID: address.ID }));
+    let verifiedEpoch;
+    let errorResponse;
+    try {
+      verifiedEpoch = await api(
+        getLatestVerifiedEpoch({ AddressID: address.ID })
+      );
+    } catch (err) {
+      errorResponse = err.message;
+    }
+    if (!verifiedEpoch && errorResponse === "Unprocessable Entity") {
+      if (address.SignedKeyList.MinEpochID === null) {
+        // Do something
+      }
+    }
+    verifiedEpoch = verifiedEpoch as { Data: string; Signature: string };
 
     // Check signature
     try {
@@ -588,11 +597,11 @@ export async function ktSelfAudit(
         verifiedEpoch.Signature
       );
     } catch (err) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: err.message,
-      };
+      });
+      continue;
     }
 
     const verifiedEpochData = JSON.parse(verifiedEpoch.Data);
@@ -606,11 +615,11 @@ export async function ktSelfAudit(
     );
 
     if (newerSKLs.length > 3) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: "More than 3 SKLs found",
-      };
+      });
+      continue;
     }
 
     // The epochs are fetched according to when SKLs changed. There could be at most one such that MinEpochID is null.
@@ -646,11 +655,11 @@ export async function ktSelfAudit(
         return currentEpoch;
       });
     } catch (err) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: err.message,
-      };
+      });
+      continue;
     }
 
     // If there aren't any new epochs in which a SKL changed, than newerEpochs will only have one element.
@@ -660,13 +669,17 @@ export async function ktSelfAudit(
         (skl) => skl.MaxEpochID === newerEpochs[0].EpochID
       );
       if (!newestEpoch) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Newest epoch is undefined",
-        };
+        });
+        continue;
       }
-      addressesToVerifiedEpochs.set(address.ID, newestEpoch);
+      addressesToVerifiedEpochs.set(address.ID, {
+        code: KT_STATUS.KT_PASSED,
+        verifiedEpoch: newestEpoch,
+        error: "",
+      });
       continue;
     }
 
@@ -684,11 +697,11 @@ export async function ktSelfAudit(
 
       const previousEpoch = j === 0 ? verifiedEpochData : newerEpochs[j - 1];
       if (epoch.EpochID <= previousEpoch.EpochID) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Current epoch is older than or equal to previous epoch",
-        };
+        });
+        continue;
       }
 
       const includedSKL =
@@ -698,11 +711,11 @@ export async function ktSelfAudit(
           : address.SignedKeyList;
 
       if (!includedSKL) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Included SKL could not be defined",
-        };
+        });
+        continue;
       }
 
       epoch.CertificateDate = await verifyEpoch(
@@ -717,11 +730,11 @@ export async function ktSelfAudit(
         epoch.CertificateDate >
           previousEpoch.CertificateDate + maximumEpochInterval
       ) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error: "Certificate date control error",
-        };
+        });
+        continue;
       }
 
       if (
@@ -730,12 +743,12 @@ export async function ktSelfAudit(
           epoch.CertificateDate >
             getSignatureTime(signatureSKL) + maximumEpochInterval)
       ) {
-        return {
+        addressesToVerifiedEpochs.set(address.ID, {
           code: KT_STATUS.KT_FAILED,
-          verifiedEpochsMap: new Map(),
           error:
             "The certificate date is older than signed key list's signature by more than maximumEpochInterval",
-        };
+        });
+        continue;
       }
     }
 
@@ -743,11 +756,11 @@ export async function ktSelfAudit(
       newerEpochs[newerEpochs.length - 1].CertificateDate >=
       maximumEpochInterval
     ) {
-      return {
+      addressesToVerifiedEpochs.set(address.ID, {
         code: KT_STATUS.KT_FAILED,
-        verifiedEpochsMap: new Map(),
         error: "Last certificate date is older than maximumEpochInterval",
-      };
+      });
+      continue;
     }
 
     const bodyData = {
@@ -770,17 +783,14 @@ export async function ktSelfAudit(
       })
     );
 
-    addressesToVerifiedEpochs.set(
-      address.ID,
-      newerEpochs[newerEpochs.length - 1]
-    );
+    addressesToVerifiedEpochs.set(address.ID, {
+      code: KT_STATUS.KT_PASSED,
+      verifiedEpochsMap: newerEpochs[newerEpochs.length - 1],
+      error: "",
+    });
   }
 
-  return {
-    code: KT_STATUS.KT_PASSED,
-    verifiedEpochsMap: addressesToVerifiedEpochs,
-    error: "",
-  };
+  return addressesToVerifiedEpochs;
 }
 
 export async function updateKT(
@@ -800,12 +810,11 @@ export async function updateKT(
     throw new Error(`Self audit failed with error "${error.message}"`);
   }
 
-  const verifiedEpoch = addressesToVerifiedEpochs.verifiedEpochsMap.get(
-    address.ID
-  );
-  if (!verifiedEpoch) {
-    throw new Error(`The address ${address.ID} was not self audited`);
+  const selfAuditResult = addressesToVerifiedEpochs.get(address.ID);
+  if (selfAuditResult?.code !== KT_STATUS.KT_PASSED) {
+    throw new Error(`Self-audit failed for address ${address.ID}`);
   }
+  const verifiedEpoch = selfAuditResult.verifiedEpochsMap as EpochExtended;
 
   if (Date.now() - verifiedEpoch.CertificateDate > maximumEpochInterval) {
     throw new Error("The last verified epoch is too old");
@@ -837,9 +846,9 @@ export async function updateKT(
   });
 
   if (hasStorage()) {
-    const userPrimaryPublicKey = await Promise.all(
-      userKeys
-        .map(async (cachedKey) => {
+    const userPrimaryPublicKey = (
+      await Promise.all(
+        userKeys.map(async (cachedKey) => {
           if (cachedKey.error || cachedKey.Key.Primary !== 1) {
             return;
           }
@@ -852,14 +861,10 @@ export async function updateKT(
           }
           return cachedKey.publicKey;
         })
-        .filter(
-          (
-            publicKey: Promise<OpenPGPKey | undefined>
-          ): publicKey is Promise<OpenPGPKey> => {
-            return publicKey !== undefined;
-          }
-        )
-    );
+      )
+    ).filter((publicKey: OpenPGPKey | undefined): publicKey is OpenPGPKey => {
+      return publicKey !== undefined;
+    });
 
     if (userPrimaryPublicKey.length === 0) {
       throw new Error("No user public key found");

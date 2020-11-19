@@ -7,7 +7,7 @@ import {
   proof,
 } from "./keyTransparency.data";
 import { verifyPublicKeys } from "../lib/keyTransparency";
-import { VERIFY_PK_STATUS } from "../lib/constants";
+import { KT_STATUS } from "../lib/constants";
 
 describe("key transparency", () => {
   const mockAddress = {
@@ -29,40 +29,55 @@ describe("key transparency", () => {
       if (splitCall.length > 3) {
         return proof;
       }
-      return returnEpoch;
+      const list = [].concat(returnEpoch);
+      if (list.length === 1) {
+        return list.shift();
+      }
+      const epochID = parseInt(splitCall.pop(), 10);
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].EpochID === epochID) {
+          return list[i];
+        }
+      }
     }
   };
 
+  const path = "https://protonmail.blue/api";
+
+  async function fetchEpoch(epochID) {
+    const response = await fetch(`${path}/kt/epochs/${epochID}`);
+    if (response.ok) {
+      return response.json();
+    }
+  }
+
   async function currentEpoch() {
     try {
-      const path = "https://protonmail.blue/api";
-      const response1 = await fetch(`${path}/kt/epochs`);
-      if (response1.ok) {
-        const epochInfo = await response1.json();
-        const response2 = await fetch(
-          `${path}/kt/epochs/${epochInfo.Epochs[0].EpochID}`
-        );
-        return response2.json();
+      const response = await fetch(`${path}/kt/epochs`);
+      if (response.ok) {
+        const epochInfo = await response.json();
+        return fetchEpoch(epochInfo.Epochs[0].EpochID);
       }
       return;
     } catch (err) {
-      console.warn(
-        "Cannot perform verification test for an error when fetching the latest epoch"
-      );
+      console.warn("Cannot perform verification test");
     }
   }
 
   it("should verify public keys", async () => {
     const newestEpoch = await currentEpoch();
     if (newestEpoch) {
-      const result = await verifyPublicKeys(
-        keyList,
-        testEmail,
-        skl,
-        mockApi(newestEpoch, mockAddress)
-      );
-      expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_PASSED);
-      expect(result.error).toEqual("");
+      const previous = await fetchEpoch(newestEpoch.EpochID - 1);
+      if (previous) {
+        const result = await verifyPublicKeys(
+          keyList,
+          testEmail,
+          { ...skl, MaxEpochID: newestEpoch.EpochID },
+          mockApi([newestEpoch, previous], mockAddress)
+        );
+        expect(result.code).toEqual(KT_STATUS.KT_PASSED);
+        expect(result.error).toEqual("");
+      }
     }
   });
 
@@ -73,7 +88,7 @@ describe("key transparency", () => {
       skl,
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(KT_STATUS.KT_FAILED);
     expect(result.error).toEqual(
       "Returned date is older than the maximum epoch interval"
     );
@@ -86,7 +101,7 @@ describe("key transparency", () => {
       { ...skl, MinEpochID: null, MaxEpochID: null },
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
+    expect(result.code).toEqual(KT_STATUS.KT_WARNING);
     expect(result.error).toEqual(
       "The keys were generated too recently to be included in key transparency"
     );
@@ -102,7 +117,7 @@ describe("key transparency", () => {
       skl,
       mockApi(epoch, corruptAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(KT_STATUS.KT_FAILED);
     expect(result.error).toEqual(`Failed to canonize email "${testEmail}"`);
   });
 
@@ -113,7 +128,7 @@ describe("key transparency", () => {
       null,
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_WARNING);
+    expect(result.code).toEqual(KT_STATUS.KT_WARNING);
     expect(result.error).toEqual("Signed key list undefined");
   });
 
@@ -124,7 +139,7 @@ describe("key transparency", () => {
       { ...skl, Data: `${skl.Data.slice(0, 12)}3${skl.Data.slice(13)}` },
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(KT_STATUS.KT_FAILED);
     expect(result.error).toEqual("Signature verification failed");
   });
 
@@ -135,7 +150,7 @@ describe("key transparency", () => {
       skl,
       mockApi(epoch, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(KT_STATUS.KT_FAILED);
     expect(result.error).toEqual(
       "Mismatch found between key list and signed key list. Key list and signed key list have different lengths"
     );
@@ -148,7 +163,7 @@ describe("key transparency", () => {
       skl,
       mockApi(epochOld, mockAddress)
     );
-    expect(result.code).toEqual(VERIFY_PK_STATUS.VERIFY_PK_FAILED);
+    expect(result.code).toEqual(KT_STATUS.KT_FAILED);
     expect(result.error).toEqual("Hash chain does not result in TreeHash");
   });
 });
