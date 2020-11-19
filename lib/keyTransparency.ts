@@ -297,6 +297,28 @@ async function getParsedSignedKeyLists(
     return fetchedSKLs.SignedKeyLists.slice(includeLastExpired ? 0 : 1);
 }
 
+async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email: string, api: Api) {
+    const currentEpoch: Epoch = await api(
+        getCertificate({
+            EpochID: signedKeyList.MaxEpochID as number,
+        })
+    );
+
+    const returnedDate: number = await verifyEpoch(currentEpoch, email, signedKeyList.Data, api);
+
+    if (Date.now() - returnedDate > maximumEpochInterval) {
+        throw new Error('Returned date is older than the maximum epoch interval');
+    }
+
+    const { Revision }: { Revision: number } = await api(getProof({ EpochID: currentEpoch.EpochID, Email: email }));
+
+    return {
+        ...currentEpoch,
+        Revision,
+        CertificateDate: returnedDate,
+    } as EpochExtended;
+}
+
 export async function ktSelfAudit(
     apis: Api[],
     addresses: Address[],
@@ -525,24 +547,9 @@ export async function ktSelfAudit(
             }
 
             // Verify current epoch
-            let currentEpoch: Epoch;
+            let verifiedCurrent;
             try {
-                currentEpoch = await api(
-                    getCertificate({
-                        EpochID: address.SignedKeyList.MaxEpochID as number,
-                    })
-                );
-            } catch (err) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Cannot fetch current epoch',
-                });
-                continue;
-            }
-
-            let returnedDate: number;
-            try {
-                returnedDate = await verifyEpoch(currentEpoch, email, address.SignedKeyList.Data, api);
+                verifiedCurrent = await verifyCurrentEpoch(address.SignedKeyList, email, api);
             } catch (err) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -550,25 +557,9 @@ export async function ktSelfAudit(
                 });
                 continue;
             }
-
-            if (Date.now() - returnedDate > maximumEpochInterval) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Returned date is older than the maximum epoch interval',
-                });
-                continue;
-            }
-
-            const { Revision }: { Revision: number } = await api(
-                getProof({ EpochID: currentEpoch.EpochID, Email: email })
-            );
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_PASSED,
-                verifiedEpoch: {
-                    ...currentEpoch,
-                    Revision,
-                    CertificateDate: returnedDate,
-                } as EpochExtended,
+                verifiedEpoch: verifiedCurrent,
                 error: '',
             });
             continue;
@@ -643,7 +634,7 @@ export async function ktSelfAudit(
         // That corresponds to the old SKL (NOTE: because any SKL with MinEpochID equal to null was ignored when constructing newerEpochs).
         if (newerEpochs.length === 1) {
             const [newestEpoch] = newerEpochs;
-            const newestSKL = newerSKLs.find((skl) => skl.MaxEpochID === newestEpoch.EpochID);
+            const newestSKL = newerSKLs.find((skl) => skl.MinEpochID === newestEpoch.EpochID);
             if (!newestEpoch || !newestSKL) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -651,9 +642,20 @@ export async function ktSelfAudit(
                 });
                 continue;
             }
+            // Verify current epoch
+            let verifiedCurrent;
+            try {
+                verifiedCurrent = await verifyCurrentEpoch(newestSKL, email, api);
+            } catch (err) {
+                addressesToVerifiedEpochs.set(address.ID, {
+                    code: KT_STATUS.KT_FAILED,
+                    error: err.message,
+                });
+                continue;
+            }
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_PASSED,
-                verifiedEpoch: newestEpoch,
+                verifiedEpoch: verifiedCurrent,
                 error: '',
             });
             continue;
