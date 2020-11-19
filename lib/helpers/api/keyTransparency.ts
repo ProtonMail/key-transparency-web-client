@@ -25,11 +25,7 @@ export const uploadVerifiedEpoch = ({
     Signature,
 }: {
     AddressID: string;
-    Data: {
-        EpochID: number;
-        ChainHash: string;
-        CertificateDate: number;
-    };
+    Data: string;
     Signature: string;
 }) => ({
     url: `kt/verifiedepoch/${AddressID}`,

@@ -305,14 +305,21 @@ export async function ktSelfAudit(
         string,
         {
             code: number;
-            verifiedEpochsMap?: EpochExtended;
+            verifiedEpoch?: EpochExtended;
             error: string;
         }
     >
 > {
     const [api, silentApi] = apis;
 
-    const addressesToVerifiedEpochs = new Map();
+    const addressesToVerifiedEpochs: Map<
+        string,
+        {
+            code: number;
+            verifiedEpoch?: EpochExtended;
+            error: string;
+        }
+    > = new Map();
     const canonicalEmailMap = await getCanonicalEmailMap(
         addresses.map((address) => address.Email),
         api
@@ -641,8 +648,9 @@ export async function ktSelfAudit(
         // If there aren't any new epochs in which a SKL changed, than newerEpochs will only have one element.
         // That corresponds to the old SKL (NOTE: because any SKL with MinEpochID equal to null was ignored when constructing newerEpochs).
         if (newerEpochs.length === 1) {
-            const newestEpoch = newerSKLs.find((skl) => skl.MaxEpochID === newerEpochs[0].EpochID);
-            if (!newestEpoch) {
+            const [newestEpoch] = newerEpochs;
+            const newestSKL = newerSKLs.find((skl) => skl.MaxEpochID === newestEpoch.EpochID);
+            if (!newestEpoch || !newestSKL) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
                     error: 'Newest epoch is undefined',
@@ -724,31 +732,40 @@ export async function ktSelfAudit(
             continue;
         }
 
-        const bodyData = {
-            EpochID: newerEpochs[newerEpochs.length - 1].EpochID,
-            ChainHash: newerEpochs[newerEpochs.length - 1].ChainHash,
-            CertificateDate: newerEpochs[newerEpochs.length - 1].CertificateDate,
-        };
-
-        await api(
-            uploadVerifiedEpoch({
-                AddressID: address.ID,
-                Data: bodyData,
-                Signature: (
-                    await signMessage({
-                        data: JSON.stringify(bodyData),
-                        privateKeys: await getKeys(address.Keys[0].PrivateKey),
-                        detached: true,
-                    })
-                ).signature,
-            })
-        );
-
         addressesToVerifiedEpochs.set(address.ID, {
             code: KT_STATUS.KT_PASSED,
-            verifiedEpochsMap: newerEpochs[newerEpochs.length - 1],
+            verifiedEpoch: newerEpochs[newerEpochs.length - 1],
             error: '',
         });
+    }
+
+    for (const element of addressesToVerifiedEpochs) {
+        const [addressID, result] = element;
+        if (result.code === KT_STATUS.KT_PASSED) {
+            const epochToUpload = result.verifiedEpoch as EpochExtended;
+            const bodyData = JSON.stringify({
+                EpochID: epochToUpload.EpochID,
+                ChainHash: epochToUpload.ChainHash,
+                CertificateDate: epochToUpload.CertificateDate,
+            });
+
+            const [privateKey] = addresses
+                .find((address) => address.ID === addressID)!
+                .Keys.map((key) => key.PrivateKey);
+            await api(
+                uploadVerifiedEpoch({
+                    AddressID: addressID,
+                    Data: bodyData,
+                    Signature: (
+                        await signMessage({
+                            data: bodyData,
+                            privateKeys: await getKeys(privateKey),
+                            detached: true,
+                        })
+                    ).signature,
+                })
+            );
+        }
     }
 
     return addressesToVerifiedEpochs;
@@ -771,7 +788,7 @@ export async function updateKT(address: Address, apis: Api[], userKeys: CachedKe
     if (selfAuditResult?.code !== KT_STATUS.KT_PASSED) {
         throw new Error(`Self-audit failed for address ${address.ID}`);
     }
-    const verifiedEpoch = selfAuditResult.verifiedEpochsMap as EpochExtended;
+    const verifiedEpoch = selfAuditResult.verifiedEpoch as EpochExtended;
 
     if (Date.now() - verifiedEpoch.CertificateDate > maximumEpochInterval) {
         throw new Error('The last verified epoch is too old');
