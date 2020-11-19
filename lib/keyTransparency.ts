@@ -19,7 +19,7 @@ import { CachedKey } from './helpers/interfaces/CachedKey';
 import { Epoch, EpochExtended, KeyInfo } from './interfaces';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { getProof, getCertificate, getLatestVerifiedEpoch, uploadVerifiedEpoch } from './helpers/api/keyTransparency';
-import { getSignedKeyLists, updateSignedKeyList } from './helpers/api/keys';
+import { getSignedKeyLists } from './helpers/api/keys';
 import { getItem, setItem, removeItem, hasStorage } from './helpers/storage';
 import { getCanonicalEmailMap } from './helpers/api/canonicalEmailMap';
 import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from './certTransparency';
@@ -27,6 +27,7 @@ import { verifyProof, verifyChainHash } from './merkleTree';
 import { KT_STATUS } from './constants';
 
 const maximumEpochInterval = 24 * 60 * 60 * 1000;
+const expectedEpochInterval = 4 * 60 * 60 * 1000;
 
 function compareKeyInfo(keyInfo: KeyInfo, sklKeyInfo: KeyInfo) {
     // Check fingerprints
@@ -114,11 +115,11 @@ async function verifyEpoch(epoch: Epoch, email: string, signedKeyListArmored: st
     // Verify ChainHash
     let previousChainHash = '0000000000000000000000000000000000000000000000000000000000000000';
     if (epoch.EpochID !== 1) {
-        if (!epoch.PreviousChainHash) {
+        if (!epoch.PrevChainHash) {
             const { ChainHash } = await api(getCertificate({ EpochID: epoch.EpochID - 1 }));
             previousChainHash = ChainHash;
         } else {
-            previousChainHash = epoch.PreviousChainHash;
+            previousChainHash = epoch.PrevChainHash;
         }
     }
     await verifyChainHash(epoch.TreeHash, previousChainHash, epoch.ChainHash);
@@ -373,7 +374,7 @@ export async function ktSelfAudit(
             address.SignedKeyList.Data
         );
 
-        const ktBlob = getItem(`kt:${address.ID}`);
+        const ktBlob = hasStorage() ? getItem(`kt:${address.ID}`) : undefined;
         if (ktBlob !== undefined && ktBlob !== null) {
             let decryptedBlob;
             try {
@@ -460,14 +461,7 @@ export async function ktSelfAudit(
                     continue;
                 }
 
-                const err = removeItem(`kt:${address.ID}`);
-                if (!err) {
-                    addressesToVerifiedEpochs.set(address.ID, {
-                        code: KT_STATUS.KT_FAILED,
-                        error: 'Removing from localStorage failed',
-                    });
-                    continue;
-                }
+                removeItem(`kt:${address.ID}`);
             } else if (Date.now() - getSignatureTime(localSignature) > maximumEpochInterval) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -771,52 +765,53 @@ export async function ktSelfAudit(
     return addressesToVerifiedEpochs;
 }
 
-export async function updateKT(address: Address, apis: Api[], userKeys: CachedKey[]): Promise<void> {
-    // const expectedEpochInterval = 4 * 60 * 60 * 1000;
-    // TODO: 1, this should be checked against some sort of flag that selfaudit saves, say, the component state
-
-    let addressesToVerifiedEpochs;
-    try {
-        // TODO: this result should be taken from, say, the component's state rather than from calling selfaudit.
-        // Also, [address] is only a temporary fix.
-        addressesToVerifiedEpochs = await ktSelfAudit(apis, [address], userKeys);
-    } catch (error) {
-        throw new Error(`Self audit failed with error "${error.message}"`);
+export async function updateKT(
+    address: Address,
+    ktSelfAuditResult: Map<
+        string,
+        {
+            code: number;
+            verifiedEpoch: EpochExtended;
+            error: string;
+        }
+    >,
+    lastSelfAudit: number,
+    isRunning: boolean,
+    userKeys: CachedKey[]
+): Promise<{ code: number; error: string }> {
+    if (isRunning) {
+        return { code: KT_STATUS.KT_WARNING, error: 'Self-audit is still running' };
     }
 
-    const selfAuditResult = addressesToVerifiedEpochs.get(address.ID);
-    if (selfAuditResult?.code !== KT_STATUS.KT_PASSED) {
-        throw new Error(`Self-audit failed for address ${address.ID}`);
+    if (Date.now() - lastSelfAudit > expectedEpochInterval) {
+        return { code: KT_STATUS.KT_WARNING, error: 'Self-audit should run before proceeding' };
     }
-    const verifiedEpoch = selfAuditResult.verifiedEpoch as EpochExtended;
+
+    const ktResult = ktSelfAuditResult.get(address.ID);
+
+    if (!ktResult) {
+        return { code: KT_STATUS.KT_FAILED, error: `${address.Email} was never audited` };
+    }
+
+    if (ktResult.code !== KT_STATUS.KT_PASSED) {
+        return {
+            code: KT_STATUS.KT_FAILED,
+            error: `Self-audit failed for ${address.Email} with error "${ktResult.error}"`,
+        };
+    }
+
+    const { verifiedEpoch } = ktResult;
 
     if (Date.now() - verifiedEpoch.CertificateDate > maximumEpochInterval) {
-        throw new Error('The last verified epoch is too old');
+        return {
+            code: KT_STATUS.KT_FAILED,
+            error: `Verified epoch for ${address.Email} is older than maximumEpochInterval`,
+        };
     }
 
-    // TODO: move this logic to the app. Alternatively, this is the only bit that might make sense to leave here
-    await apis[0](
-        updateSignedKeyList(
-            { AddressID: address.ID },
-            {
-                SignedKeyList: {
-                    Data: address.SignedKeyList.Data,
-                    Signature: address.SignedKeyList.Signature,
-                },
-            }
-        )
-    );
-
     const message = JSON.stringify({
-        Epoch: {
-            EpochID: verifiedEpoch.EpochID,
-            TreeHash: verifiedEpoch.TreeHash,
-            ChainHash: verifiedEpoch.ChainHash,
-        },
-        SignedKeyList: {
-            Data: address.SignedKeyList.Data,
-            Signature: address.SignedKeyList.Signature,
-        },
+        Epoch: verifiedEpoch,
+        SignedKeyList: address.SignedKeyList,
     });
 
     if (hasStorage()) {
@@ -841,10 +836,10 @@ export async function updateKT(address: Address, apis: Api[], userKeys: CachedKe
         });
 
         if (userPrimaryPublicKey.length === 0) {
-            throw new Error('No user public key found');
+            return { code: KT_STATUS.KT_FAILED, error: 'No keys found to encrypt KT blob to localStorage' };
         }
 
-        const err = setItem(
+        setItem(
             `kt:${address.ID}`,
             (
                 await encryptMessage({
@@ -853,8 +848,7 @@ export async function updateKT(address: Address, apis: Api[], userKeys: CachedKe
                 })
             ).data
         );
-        if (!err) {
-            throw new Error('Saving to localStorage failed');
-        }
     }
+
+    return { code: KT_STATUS.KT_PASSED, error: '' };
 }
