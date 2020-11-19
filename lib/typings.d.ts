@@ -1,1 +1,1 @@
-declare module "pkijs/src/SignedCertificateTimestampList";
+declare module 'pkijs/src/SignedCertificateTimestampList';
