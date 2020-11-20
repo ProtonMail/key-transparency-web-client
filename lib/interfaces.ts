@@ -2,7 +2,7 @@ export interface Epoch {
     EpochID: number;
     TreeHash: string;
     ChainHash: string;
-    PrevChainHash?: string;
+    PrevChainHash: string;
     Certificate: string;
     IssuerKeyHash: string;
 }

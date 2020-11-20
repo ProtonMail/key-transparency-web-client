@@ -113,16 +113,7 @@ async function verifyEpoch(epoch: Epoch, email: string, signedKeyListArmored: st
     await verifyProof(Name, Revision, Proof, Neighbors, epoch.TreeHash, signedKeyListArmored, email);
 
     // Verify ChainHash
-    let previousChainHash = '0000000000000000000000000000000000000000000000000000000000000000';
-    if (epoch.EpochID !== 1) {
-        if (!epoch.PrevChainHash) {
-            const { ChainHash } = await api(getCertificate({ EpochID: epoch.EpochID - 1 }));
-            previousChainHash = ChainHash;
-        } else {
-            previousChainHash = epoch.PrevChainHash;
-        }
-    }
-    await verifyChainHash(epoch.TreeHash, previousChainHash, epoch.ChainHash);
+    await verifyChainHash(epoch.TreeHash, epoch.PrevChainHash, epoch.ChainHash);
 
     // Parse and verify certificate
     let certificate: Certificate;
