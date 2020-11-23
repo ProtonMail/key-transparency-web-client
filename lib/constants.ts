@@ -1,8 +1,8 @@
-export const KT_STATUS: { [key: string]: number } = {
-    KT_FAILED: 0,
-    KT_PASSED: 1,
-    KT_WARNING: 2,
-};
+export enum KT_STATUS {
+    KT_FAILED,
+    KT_PASSED,
+    KT_WARNING,
+}
 
 export const vrfHexKey = '2d7688feb429f714f102f758412cd4b81337b307122770f620ad9e4ac898a2eb';
 
