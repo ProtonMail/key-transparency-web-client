@@ -43,15 +43,14 @@ export async function verifyProof(
     let val = await SHA256(
         concatArrays([
             await SHA256(binaryStringToArray(sklData)),
-            binaryStringToArray('.'),
-            binaryStringToArray(`${Revision}`),
+            new Uint8Array([Revision >>> 24, Revision >>> 16, Revision >>> 8, Revision]),
         ])
     );
     const emptyNode = new Uint8Array(32);
     const key = hexStringToArray(Name);
 
     for (let i = Neighbors.length - 1; i >= 0; i--) {
-        const bit = (key[Math.floor(i / 8) % 32] >> (8 - (i % 8) - 1)) & 1;
+        const bit = (key[Math.floor(i / 8) % 32] >>> (8 - (i % 8) - 1)) & 1;
         const neighbor = Neighbors[i] === null ? emptyNode : hexStringToArray(Neighbors[i]);
         const toHash = bit === LEFT_N ? concatArrays([neighbor, val]) : concatArrays([val, neighbor]);
         val = await SHA256(toHash);

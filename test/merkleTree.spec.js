@@ -1,4 +1,4 @@
-import { testEmail, skl, epoch, epochOld, proof } from './keyTransparency.data';
+import { testEmail, skl, epoch, proof } from './keyTransparency.data';
 import { verifyProof, verifyChainHash } from '../lib/merkleTree';
 
 describe('merkle tree', () => {
@@ -214,10 +214,8 @@ describe('merkle tree', () => {
 
     it('should verify chain hash consistency', async () => {
         const { TreeHash, ChainHash, PrevChainHash } = epoch;
-        const { TreeHash: TreeHashOld, ChainHash: ChainHashOld, PrevChainHash: PrevChainHashOld } = epochOld;
 
         await verifyChainHash(TreeHash, PrevChainHash, ChainHash);
-        await verifyChainHash(TreeHashOld, PrevChainHashOld, ChainHashOld);
     });
 
     it('should fail chain hash consistency', async () => {
