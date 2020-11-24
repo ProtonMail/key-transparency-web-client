@@ -18,13 +18,14 @@ import { Address } from './helpers/interfaces/Address';
 import { CachedKey } from './helpers/interfaces/CachedKey';
 import { Epoch, EpochExtended, KeyInfo } from './interfaces';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
-import { getProof, getCertificate, getLatestVerifiedEpoch, uploadVerifiedEpoch } from './helpers/api/keyTransparency';
-import { getSignedKeyLists } from './helpers/api/keys';
+import { uploadVerifiedEpoch } from './helpers/api/keyTransparency';
+import { getParsedSignedKeyLists, fetchProof, fetchEpoch, getVerifiedEpoch } from './fetchHelper';
 import { getItem, setItem, removeItem, hasStorage } from './helpers/storage';
 import { getCanonicalEmailMap } from './helpers/api/canonicalEmailMap';
 import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from './certTransparency';
 import { verifyProof, verifyChainHash } from './merkleTree';
 import { KT_STATUS } from './constants';
+import { SimpleMap } from './helpers/interfaces/utils';
 
 const maximumEpochInterval = 24 * 60 * 60 * 1000;
 const expectedEpochInterval = 4 * 60 * 60 * 1000;
@@ -109,8 +110,8 @@ async function verifyKeyLists(
 
 async function verifyEpoch(epoch: Epoch, email: string, signedKeyListArmored: string, api: Api): Promise<number> {
     // Fetch and verify proof
-    const { Name, Proof, Revision, Neighbors } = await api(getProof({ EpochID: epoch.EpochID, Email: email }));
-    await verifyProof(Name, Revision, Proof, Neighbors, epoch.TreeHash, signedKeyListArmored, email);
+    const proof = await fetchProof(epoch.EpochID, email, api);
+    await verifyProof(proof, epoch.TreeHash, signedKeyListArmored, email);
 
     // Verify ChainHash
     await verifyChainHash(epoch.TreeHash, epoch.PrevChainHash, epoch.ChainHash);
@@ -240,7 +241,7 @@ export async function verifyPublicKeys(
     // Verify latest epoch
     let maxEpoch: Epoch;
     try {
-        maxEpoch = await api(getCertificate({ EpochID: signedKeyList.MaxEpochID }));
+        maxEpoch = await fetchEpoch(signedKeyList.MaxEpochID, api);
     } catch (err) {
         return { code: KT_STATUS.KT_FAILED, error: err.message };
     }
@@ -270,31 +271,8 @@ function getSignatureTime(signature: OpenPGPSignature): number {
     return (packet as any).created.getTime();
 }
 
-async function getParsedSignedKeyLists(
-    api: Api,
-    epochID: number,
-    email: string,
-    includeLastExpired: boolean
-): Promise<SignedKeyListInfo[]> {
-    const fetchedSKLs: {
-        SignedKeyLists: SignedKeyListInfo[];
-    } = await api(getSignedKeyLists({ SinceEpochID: epochID, Email: email }));
-    /*
-    fetchedSKLs.SignedKeyLists contains:
-        - the last expired SKL, i.e. the newest SKL such that MinEpochID <= SinceEpochID
-        - all SKLs such that MinEpochID > SinceEpochID
-        - the latest SKL, i.e. such that MinEpochID is null
-    in chronological order.
-    */
-    return fetchedSKLs.SignedKeyLists.slice(includeLastExpired ? 0 : 1);
-}
-
 async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email: string, api: Api) {
-    const currentEpoch: Epoch = await api(
-        getCertificate({
-            EpochID: signedKeyList.MaxEpochID as number,
-        })
-    );
+    const currentEpoch = await fetchEpoch(signedKeyList.MaxEpochID as number, api);
 
     const returnedDate: number = await verifyEpoch(currentEpoch, email, signedKeyList.Data, api);
 
@@ -302,7 +280,7 @@ async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email: strin
         throw new Error('Returned date is older than the maximum epoch interval');
     }
 
-    const { Revision }: { Revision: number } = await api(getProof({ EpochID: currentEpoch.EpochID, Email: email }));
+    const { Revision }: { Revision: number } = await fetchProof(currentEpoch.EpochID, email, api);
 
     return {
         ...currentEpoch,
@@ -325,8 +303,10 @@ export async function ktSelfAudit(
         }
     >
 > {
+    // silentApi is used to prevent red banner when a verified epoch is not found
     const [api, silentApi] = apis;
 
+    // Initialise output
     const addressesToVerifiedEpochs: Map<
         string,
         {
@@ -335,11 +315,19 @@ export async function ktSelfAudit(
             error: string;
         }
     > = new Map();
-    const canonicalEmailMap = await getCanonicalEmailMap(
-        addresses.map((address) => address.Email),
-        api
-    );
 
+    // Canonize emails
+    let canonicalEmailMap: SimpleMap<string> | undefined;
+    try {
+        canonicalEmailMap = await getCanonicalEmailMap(
+            addresses.map((address) => address.Email),
+            api
+        );
+    } catch (err) {
+        canonicalEmailMap = undefined;
+    }
+
+    // Prepare user private key for localStorage decrypt
     const userPrivateKeys = (
         await Promise.all(
             userKeys.map(async (cachedKey) => {
@@ -360,8 +348,17 @@ export async function ktSelfAudit(
         return privateKey !== undefined;
     });
 
+    // Main loop through addresses
     for (let i = 0; i < addresses.length; i++) {
+        // Parse info from address
         const address = addresses[i];
+        if (!canonicalEmailMap) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Failed to get canonized emails',
+            });
+            continue;
+        }
         const email = canonicalEmailMap[address.Email];
         if (!email) {
             addressesToVerifiedEpochs.set(address.ID, {
@@ -388,100 +385,113 @@ export async function ktSelfAudit(
             address.SignedKeyList.Data
         );
 
-        const ktBlob = hasStorage() ? getItem(`kt:${address.ID}`) : undefined;
-        if (ktBlob !== undefined && ktBlob !== null) {
-            let decryptedBlob;
-            try {
-                decryptedBlob = JSON.parse(
-                    (
-                        await decryptMessage({
-                            message: await getMessage(ktBlob),
-                            privateKeys: userPrivateKeys,
+        // Check content of localStorage
+        if (hasStorage()) {
+            const ktBlobs = [getItem(`kt:0:${address.ID}`), getItem(`kt:1:${address.ID}`)];
+            let errorFlag = false;
+            for (let i = 0; i < ktBlobs.length; i++) {
+                const ktBlob = ktBlobs[i];
+                if (ktBlob) {
+                    // Decrypt and parektBlob
+                    let decryptedBlob;
+                    try {
+                        decryptedBlob = JSON.parse(
+                            (
+                                await decryptMessage({
+                                    message: await getMessage(ktBlob),
+                                    privateKeys: userPrivateKeys,
+                                })
+                            ).data
+                        );
+                    } catch (error) {
+                        addressesToVerifiedEpochs.set(address.ID, {
+                            code: KT_STATUS.KT_FAILED,
+                            error: `Decrytption of ktBlob in localStorage failed with error "${error.message}"`,
+                        });
+                        errorFlag = true;
+                        break;
+                    }
+                    const { SignedKeyList: localSKL, Epoch: localEpoch } = decryptedBlob;
+                    const localSignature = await getSignature(localSKL.Signature);
+
+                    // Retrieve oldest SKL since localEpoch.EpochID
+                    const fetchedSKLs = await getParsedSignedKeyLists(api, localEpoch.EpochID, email, false);
+                    const includedSKLarray: SignedKeyListInfo[] = await Promise.all(
+                        fetchedSKLs.filter(async (skl) => {
+                            const sklSignature = await getSignature(skl.Signature);
+                            return (
+                                (skl.MinEpochID === null || skl.MinEpochID > localEpoch.EpochID) &&
+                                getSignatureTime(sklSignature) >= getSignatureTime(localSignature)
+                            );
                         })
-                    ).data
-                );
-            } catch (error) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: `Decrytption of ktBlob in localStorage failed with error "${error.message}"`,
-                });
-                continue;
-            }
-
-            const localSKL = decryptedBlob.SignedKeyList;
-            const localEpoch = decryptedBlob.Epoch;
-
-            const fetchedSKLs = await getParsedSignedKeyLists(api, localEpoch.EpochID, email, false);
-
-            const localSignature = await getSignature(localSKL.Signature);
-
-            const includedSKLarray: SignedKeyListInfo[] = await Promise.all(
-                fetchedSKLs.filter(async (skl) => {
-                    const sklSignature = await getSignature(skl.Signature);
-                    return (
-                        (skl.MinEpochID === null || skl.MinEpochID > localEpoch.EpochID) &&
-                        getSignatureTime(sklSignature) >= getSignatureTime(localSignature)
                     );
-                })
-            );
-            // NOTE: "first" in 1b is interpreted as "in position 0", since getParsedSignedKeyLists returns ordered SKLs
-            const includedSKL = includedSKLarray.shift();
+                    const [includedSKL] = includedSKLarray;
+                    if (!includedSKL) {
+                        addressesToVerifiedEpochs.set(address.ID, {
+                            code: KT_STATUS.KT_FAILED,
+                            error: 'Included signed key list not found',
+                        });
+                        errorFlag = true;
+                        break;
+                    }
+                    const includedSignature = await getSignature(includedSKL.Signature);
 
-            if (!includedSKL) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Included signed key list not found',
-                });
-                continue;
-            }
+                    if (getSignatureTime(includedSignature) - getSignatureTime(localSignature) > maximumEpochInterval) {
+                        addressesToVerifiedEpochs.set(address.ID, {
+                            code: KT_STATUS.KT_FAILED,
+                            error:
+                                'Signed key list in localStorage is older than included signed key list by more than maximumEpochInterval',
+                        });
+                        errorFlag = true;
+                        break;
+                    }
 
-            const includedSignature = await getSignature(includedSKL.Signature);
+                    // Check signature
+                    try {
+                        await checkSignature(
+                            includedSKL.Data,
+                            parsedKeyList.map((key) => key.PublicKey),
+                            includedSKL.Signature,
+                            'Included SKL localStorage self-audit'
+                        );
+                    } catch (err) {
+                        addressesToVerifiedEpochs.set(address.ID, {
+                            code: KT_STATUS.KT_FAILED,
+                            error: err.message,
+                        });
+                        errorFlag = true;
+                        break;
+                    }
 
-            if (getSignatureTime(includedSignature) - getSignatureTime(localSignature) > maximumEpochInterval) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error:
-                        'Signed key list in localStorage is older than included signed key list by more than maximumEpochInterval',
-                });
-                continue;
-            }
+                    // If the includedSKL hasn't had time of entering an epoch, self-audit proceeds.
+                    // Otherwise, we check it's there.
+                    if (includedSKL.MinEpochID !== null) {
+                        const minEpoch = await fetchEpoch(includedSKL.MinEpochID, api);
 
-            // Check signature
-            try {
-                await checkSignature(
-                    includedSKL.Data,
-                    parsedKeyList.map((key) => key.PublicKey),
-                    includedSKL.Signature,
-                    'Included SKL localStorage self-audit'
-                );
-            } catch (err) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: err.message,
-                });
-                continue;
-            }
+                        const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
 
-            if (includedSKL.MinEpochID !== null) {
-                const minEpoch: Epoch = await api(getCertificate({ EpochID: includedSKL.MinEpochID }));
+                        if (returnedDate - getSignatureTime(localSignature) > maximumEpochInterval) {
+                            addressesToVerifiedEpochs.set(address.ID, {
+                                code: KT_STATUS.KT_FAILED,
+                                error:
+                                    'Returned date is older than the signed key list in localStorage by more than maximumEpochInterval',
+                            });
+                            errorFlag = true;
+                            break;
+                        }
 
-                const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
-
-                if (returnedDate - getSignatureTime(localSignature) > maximumEpochInterval) {
-                    addressesToVerifiedEpochs.set(address.ID, {
-                        code: KT_STATUS.KT_FAILED,
-                        error:
-                            'Returned date is older than the signed key list in localStorage by more than maximumEpochInterval',
-                    });
-                    continue;
+                        removeItem(`kt:${i}:${address.ID}`);
+                    } else if (Date.now() - getSignatureTime(localSignature) > maximumEpochInterval) {
+                        addressesToVerifiedEpochs.set(address.ID, {
+                            code: KT_STATUS.KT_FAILED,
+                            error: 'Signed key list in localStorage is older than maximumEpochInterval',
+                        });
+                        errorFlag = true;
+                        break;
+                    }
                 }
-
-                removeItem(`kt:${address.ID}`);
-            } else if (Date.now() - getSignatureTime(localSignature) > maximumEpochInterval) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Signed key list in localStorage is older than maximumEpochInterval',
-                });
+            }
+            if (errorFlag) {
                 continue;
             }
         }
@@ -524,14 +534,8 @@ export async function ktSelfAudit(
             }
         }
 
-        let verifiedEpoch;
-        let errorResponse;
-        try {
-            verifiedEpoch = await silentApi(getLatestVerifiedEpoch({ AddressID: address.ID }));
-        } catch (err) {
-            errorResponse = err.message;
-        }
-        if (!verifiedEpoch && errorResponse === 'Unprocessable Entity') {
+        const verifiedEpoch = await getVerifiedEpoch(silentApi, address.ID);
+        if (!verifiedEpoch) {
             if (address.SignedKeyList.MinEpochID === null) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_WARNING,
@@ -558,7 +562,6 @@ export async function ktSelfAudit(
             });
             continue;
         }
-        verifiedEpoch = verifiedEpoch as { Data: string; Signature: string };
 
         // Check signature
         try {
@@ -595,11 +598,9 @@ export async function ktSelfAudit(
             newerSKLs
                 .filter((skl) => skl.MinEpochID !== null)
                 .map(async (skl) => {
-                    const epoch: Epoch = await api(getCertificate({ EpochID: skl.MinEpochID as number }));
+                    const epoch = await fetchEpoch(skl.MinEpochID as number, api);
 
-                    const { Revision }: { Revision: number } = await api(
-                        getProof({ EpochID: epoch.EpochID, Email: email })
-                    );
+                    const { Revision }: { Revision: number } = await fetchProof(epoch.EpochID, email, api);
 
                     return {
                         ...epoch,
@@ -715,6 +716,7 @@ export async function ktSelfAudit(
             }
         }
 
+        // Chech latest certificate is within acceptable range
         if (newerEpochs[newerEpochs.length - 1].CertificateDate >= maximumEpochInterval) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
@@ -723,40 +725,34 @@ export async function ktSelfAudit(
             continue;
         }
 
+        // Set output for current address
         addressesToVerifiedEpochs.set(address.ID, {
             code: KT_STATUS.KT_PASSED,
             verifiedEpoch: newerEpochs[newerEpochs.length - 1],
             error: '',
         });
-    }
 
-    for (const element of addressesToVerifiedEpochs) {
-        const [addressID, result] = element;
-        if (result.code === KT_STATUS.KT_PASSED) {
-            const epochToUpload = result.verifiedEpoch as EpochExtended;
-            const bodyData = JSON.stringify({
-                EpochID: epochToUpload.EpochID,
-                ChainHash: epochToUpload.ChainHash,
-                CertificateDate: epochToUpload.CertificateDate,
-            });
+        // Upload verified epoch for current address
+        const bodyData = JSON.stringify({
+            EpochID: newerEpochs[newerEpochs.length - 1].EpochID,
+            ChainHash: newerEpochs[newerEpochs.length - 1].ChainHash,
+            CertificateDate: newerEpochs[newerEpochs.length - 1].CertificateDate,
+        });
 
-            const [privateKey] = (addresses.find((address) => address.ID === addressID) as Address).Keys.map(
-                (key) => key.PrivateKey
-            );
-            await api(
-                uploadVerifiedEpoch({
-                    AddressID: addressID,
-                    Data: bodyData,
-                    Signature: (
-                        await signMessage({
-                            data: bodyData,
-                            privateKeys: await getKeys(privateKey),
-                            detached: true,
-                        })
-                    ).signature,
-                })
-            );
-        }
+        const [privateKey] = address.Keys.map((key) => key.PrivateKey);
+        await api(
+            uploadVerifiedEpoch({
+                AddressID: address.ID,
+                Data: bodyData,
+                Signature: (
+                    await signMessage({
+                        data: bodyData,
+                        privateKeys: await getKeys(privateKey),
+                        detached: true,
+                    })
+                ).signature,
+            })
+        );
     }
 
     return addressesToVerifiedEpochs;
@@ -812,6 +808,21 @@ export async function updateKT(
     });
 
     if (hasStorage()) {
+        // Check if there is something in localStorage with counter either 0 or 1
+        let counter = 0;
+        const firstLS = getItem(`kt:0:${address.ID}`);
+        const secondLS = getItem(`kt:1:${address.ID}`);
+
+        if (firstLS && !secondLS) {
+            counter = 1;
+        } else if (!firstLS && secondLS) {
+            counter = 1;
+            setItem(`kt:0:${address.ID}`, secondLS);
+        } else if (firstLS && secondLS) {
+            return { code: KT_STATUS.KT_FAILED, error: 'There are already two blobs in localStorage' };
+        }
+
+        // Save the new blob
         const userPrimaryPublicKey = (
             await Promise.all(
                 userKeys.map(async (cachedKey) => {
@@ -837,7 +848,7 @@ export async function updateKT(
         }
 
         setItem(
-            `kt:${address.ID}`,
+            `kt:${counter}:${address.ID}`,
             (
                 await encryptMessage({
                     data: message,
