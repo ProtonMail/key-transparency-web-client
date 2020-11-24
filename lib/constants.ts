@@ -1,3 +1,6 @@
+export const maximumEpochInterval = 24 * 60 * 60 * 1000;
+export const expectedEpochInterval = 4 * 60 * 60 * 1000;
+
 export enum KT_STATUS {
     KT_FAILED,
     KT_PASSED,
