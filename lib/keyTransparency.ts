@@ -8,7 +8,7 @@ import { uploadVerifiedEpoch } from './helpers/api/keyTransparency';
 import { getParsedSignedKeyLists, fetchProof, fetchEpoch, getVerifiedEpoch } from './fetchHelper';
 import { getItem, setItem, removeItem, hasStorage } from './helpers/storage';
 import { getCanonicalEmailMap } from './helpers/api/canonicalEmailMap';
-import { KT_STATUS, maximumEpochInterval, expectedEpochInterval } from './constants';
+import { KT_STATUS, MAX_EPOCH_INTERVAL, EXP_EPOCH_INTERVAL } from './constants';
 import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
@@ -95,7 +95,7 @@ export async function verifyPublicKeys(
         return { code: KT_STATUS.KT_FAILED, error: err.message };
     }
 
-    if (Date.now() - returnedDate > maximumEpochInterval) {
+    if (Date.now() - returnedDate > MAX_EPOCH_INTERVAL) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: 'Returned date is older than the maximum epoch interval',
@@ -252,11 +252,11 @@ export async function ktSelfAudit(
                     }
                     const includedSignature = await getSignature(includedSKL.Signature);
 
-                    if (getSignatureTime(includedSignature) - getSignatureTime(localSignature) > maximumEpochInterval) {
+                    if (getSignatureTime(includedSignature) - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
                             error:
-                                'Signed key list in localStorage is older than included signed key list by more than maximumEpochInterval',
+                                'Signed key list in localStorage is older than included signed key list by more than MAX_EPOCH_INTERVAL',
                         });
                         errorFlag = true;
                         break;
@@ -286,21 +286,21 @@ export async function ktSelfAudit(
 
                         const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
 
-                        if (returnedDate - getSignatureTime(localSignature) > maximumEpochInterval) {
+                        if (returnedDate - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
                             addressesToVerifiedEpochs.set(address.ID, {
                                 code: KT_STATUS.KT_FAILED,
                                 error:
-                                    'Returned date is older than the signed key list in localStorage by more than maximumEpochInterval',
+                                    'Returned date is older than the signed key list in localStorage by more than MAX_EPOCH_INTERVAL',
                             });
                             errorFlag = true;
                             break;
                         }
 
                         removeItem(`kt:${i}:${address.ID}`);
-                    } else if (Date.now() - getSignatureTime(localSignature) > maximumEpochInterval) {
+                    } else if (Date.now() - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
-                            error: 'Signed key list in localStorage is older than maximumEpochInterval',
+                            error: 'Signed key list in localStorage is older than MAX_EPOCH_INTERVAL',
                         });
                         errorFlag = true;
                         break;
@@ -341,10 +341,10 @@ export async function ktSelfAudit(
 
         const signatureSKL = await getSignature(address.SignedKeyList.Signature);
         if (address.SignedKeyList.MinEpochID === null) {
-            if (Date.now() - getSignatureTime(signatureSKL) > maximumEpochInterval) {
+            if (Date.now() - getSignatureTime(signatureSKL) > MAX_EPOCH_INTERVAL) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
-                    error: 'Signed key list is older than maximumEpochInterval',
+                    error: 'Signed key list is older than MAX_EPOCH_INTERVAL',
                 });
                 continue;
             }
@@ -509,7 +509,7 @@ export async function ktSelfAudit(
 
             if (
                 epoch.CertificateDate < previousEpoch.CertificateDate &&
-                epoch.CertificateDate > previousEpoch.CertificateDate + maximumEpochInterval
+                epoch.CertificateDate > previousEpoch.CertificateDate + MAX_EPOCH_INTERVAL
             ) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -521,22 +521,22 @@ export async function ktSelfAudit(
             if (
                 address.SignedKeyList.MinEpochID === null ||
                 (address.SignedKeyList.MinEpochID > epoch.EpochID &&
-                    epoch.CertificateDate > getSignatureTime(signatureSKL) + maximumEpochInterval)
+                    epoch.CertificateDate > getSignatureTime(signatureSKL) + MAX_EPOCH_INTERVAL)
             ) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
                     error:
-                        "The certificate date is older than signed key list's signature by more than maximumEpochInterval",
+                        "The certificate date is older than signed key list's signature by more than MAX_EPOCH_INTERVAL",
                 });
                 continue;
             }
         }
 
         // Chech latest certificate is within acceptable range
-        if (newerEpochs[newerEpochs.length - 1].CertificateDate >= maximumEpochInterval) {
+        if (newerEpochs[newerEpochs.length - 1].CertificateDate >= MAX_EPOCH_INTERVAL) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
-                error: 'Last certificate date is older than maximumEpochInterval',
+                error: 'Last certificate date is older than MAX_EPOCH_INTERVAL',
             });
             continue;
         }
@@ -592,7 +592,7 @@ export async function updateKT(
         return { code: KT_STATUS.KT_WARNING, error: 'Self-audit is still running' };
     }
 
-    if (Date.now() - lastSelfAudit > expectedEpochInterval) {
+    if (Date.now() - lastSelfAudit > EXP_EPOCH_INTERVAL) {
         return { code: KT_STATUS.KT_WARNING, error: 'Self-audit should run before proceeding' };
     }
 
@@ -611,10 +611,10 @@ export async function updateKT(
 
     const { verifiedEpoch } = ktResult;
 
-    if (Date.now() - verifiedEpoch.CertificateDate > maximumEpochInterval) {
+    if (Date.now() - verifiedEpoch.CertificateDate > MAX_EPOCH_INTERVAL) {
         return {
             code: KT_STATUS.KT_FAILED,
-            error: `Verified epoch for ${address.Email} is older than maximumEpochInterval`,
+            error: `Verified epoch for ${address.Email} is older than MAX_EPOCH_INTERVAL`,
         };
     }
 
