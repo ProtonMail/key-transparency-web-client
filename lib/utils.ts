@@ -15,7 +15,7 @@ import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { fetchProof, fetchEpoch } from './fetchHelper';
 import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from './certTransparency';
 import { verifyProof, verifyChainHash } from './merkleTree';
-import { maximumEpochInterval } from './constants';
+import { MAX_EPOCH_INTERVAL } from './constants';
 
 export function compareKeyInfo(keyInfo: KeyInfo, sklKeyInfo: KeyInfo) {
     // Check fingerprints
@@ -182,13 +182,20 @@ export function getSignatureTime(signature: OpenPGPSignature): number {
     return (packet as any).created.getTime();
 }
 
+export function compareTimes(time: number, refereceTime?: number) {
+    if (!refereceTime) {
+        refereceTime = Date.now();
+    }
+    return refereceTime - time > MAX_EPOCH_INTERVAL;
+}
+
 export async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email: string, api: Api) {
     const currentEpoch = await fetchEpoch(signedKeyList.MaxEpochID as number, api);
 
     const returnedDate: number = await verifyEpoch(currentEpoch, email, signedKeyList.Data, api);
 
-    if (Date.now() - returnedDate > maximumEpochInterval) {
-        throw new Error('Returned date is older than the maximum epoch interval');
+    if (compareTimes(returnedDate)) {
+        throw new Error('Returned date is older than MAX_EPOCH_INTERVAL');
     }
 
     const { Revision }: { Revision: number } = await fetchProof(currentEpoch.EpochID, email, api);

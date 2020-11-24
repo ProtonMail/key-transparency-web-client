@@ -13,6 +13,7 @@ import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
     getSignatureTime,
+    compareTimes,
     parseKeyLists,
     verifyCurrentEpoch,
     verifyEpoch,
@@ -95,7 +96,7 @@ export async function verifyPublicKeys(
         return { code: KT_STATUS.KT_FAILED, error: err.message };
     }
 
-    if (Date.now() - returnedDate > MAX_EPOCH_INTERVAL) {
+    if (compareTimes(returnedDate)) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: 'Returned date is older than the maximum epoch interval',
@@ -252,7 +253,7 @@ export async function ktSelfAudit(
                     }
                     const includedSignature = await getSignature(includedSKL.Signature);
 
-                    if (getSignatureTime(includedSignature) - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
+                    if (compareTimes(getSignatureTime(localSignature), getSignatureTime(includedSignature))) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
                             error:
@@ -286,7 +287,7 @@ export async function ktSelfAudit(
 
                         const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
 
-                        if (returnedDate - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
+                        if (compareTimes(getSignatureTime(localSignature), returnedDate)) {
                             addressesToVerifiedEpochs.set(address.ID, {
                                 code: KT_STATUS.KT_FAILED,
                                 error:
@@ -297,7 +298,7 @@ export async function ktSelfAudit(
                         }
 
                         removeItem(`kt:${i}:${address.ID}`);
-                    } else if (Date.now() - getSignatureTime(localSignature) > MAX_EPOCH_INTERVAL) {
+                    } else if (compareTimes(getSignatureTime(localSignature))) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
                             error: 'Signed key list in localStorage is older than MAX_EPOCH_INTERVAL',
@@ -340,14 +341,12 @@ export async function ktSelfAudit(
         }
 
         const signatureSKL = await getSignature(address.SignedKeyList.Signature);
-        if (address.SignedKeyList.MinEpochID === null) {
-            if (Date.now() - getSignatureTime(signatureSKL) > MAX_EPOCH_INTERVAL) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Signed key list is older than MAX_EPOCH_INTERVAL',
-                });
-                continue;
-            }
+        if (address.SignedKeyList.MinEpochID === null && compareTimes(getSignatureTime(signatureSKL))) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Signed key list is older than MAX_EPOCH_INTERVAL',
+            });
+            continue;
         }
 
         const verifiedEpoch = await getVerifiedEpoch(silentApi, address.ID);
@@ -509,7 +508,7 @@ export async function ktSelfAudit(
 
             if (
                 epoch.CertificateDate < previousEpoch.CertificateDate &&
-                epoch.CertificateDate > previousEpoch.CertificateDate + MAX_EPOCH_INTERVAL
+                compareTimes(previousEpoch.CertificateDate, epoch.CertificateDate)
             ) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -521,7 +520,7 @@ export async function ktSelfAudit(
             if (
                 address.SignedKeyList.MinEpochID === null ||
                 (address.SignedKeyList.MinEpochID > epoch.EpochID &&
-                    epoch.CertificateDate > getSignatureTime(signatureSKL) + MAX_EPOCH_INTERVAL)
+                    compareTimes(getSignatureTime(signatureSKL), epoch.CertificateDate))
             ) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -611,7 +610,7 @@ export async function updateKT(
 
     const { verifiedEpoch } = ktResult;
 
-    if (Date.now() - verifiedEpoch.CertificateDate > MAX_EPOCH_INTERVAL) {
+    if (compareTimes(verifiedEpoch.CertificateDate)) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: `Verified epoch for ${address.Email} is older than MAX_EPOCH_INTERVAL`,
