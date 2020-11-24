@@ -165,14 +165,14 @@ async function parseKeyLists(
     };
 }
 
-async function checkSignature(message: string, publicKeys: OpenPGPKey[], signature: string) {
+async function checkSignature(message: string, publicKeys: OpenPGPKey[], signature: string, failMessage: string) {
     const { verified } = await verifyMessage({
         message: createMessage(message),
         publicKeys,
         signature: await getSignature(signature),
     });
     if (verified !== VERIFICATION_STATUS.SIGNED_AND_VALID) {
-        throw new Error('Signature verification failed');
+        throw new Error(`Signature verification failed (${failMessage})`);
     }
 }
 
@@ -212,7 +212,8 @@ export async function verifyPublicKeys(
         await checkSignature(
             signedKeyList.Data,
             parsedKeyList.map((key) => key.PublicKey),
-            signedKeyList.Signature
+            signedKeyList.Signature,
+            'SKL during PK verification'
         );
     } catch (err) {
         return { code: KT_STATUS.KT_FAILED, error: err.message };
@@ -450,7 +451,8 @@ export async function ktSelfAudit(
                 await checkSignature(
                     includedSKL.Data,
                     parsedKeyList.map((key) => key.PublicKey),
-                    includedSKL.Signature
+                    includedSKL.Signature,
+                    'Included SKL localStorage self-audit'
                 );
             } catch (err) {
                 addressesToVerifiedEpochs.set(address.ID, {
@@ -500,7 +502,8 @@ export async function ktSelfAudit(
             await checkSignature(
                 address.SignedKeyList.Data,
                 parsedKeyList.map((key) => key.PublicKey),
-                address.SignedKeyList.Signature
+                address.SignedKeyList.Signature,
+                'Fetched SKL elf-audit'
             );
         } catch (err) {
             addressesToVerifiedEpochs.set(address.ID, {
@@ -562,7 +565,8 @@ export async function ktSelfAudit(
             await checkSignature(
                 verifiedEpoch.Data,
                 parsedKeyList.map((key) => key.PublicKey),
-                verifiedEpoch.Signature
+                verifiedEpoch.Signature,
+                'Verified epoch self-audit'
             );
         } catch (err) {
             addressesToVerifiedEpochs.set(address.ID, {
