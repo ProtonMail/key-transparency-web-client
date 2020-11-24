@@ -18,3 +18,10 @@ export interface KeyInfo {
     Primary: number;
     Flags: number;
 }
+
+export interface Proof {
+    Neighbors: string[];
+    Proof: string;
+    Revision: number;
+    Name: string;
+}

@@ -1,6 +1,7 @@
 import { SHA256, arrayToHexString, concatArrays, binaryStringToArray } from 'pmcrypto';
 import { vrfVerify } from './vrf';
 import { vrfHexKey } from './constants';
+import { Proof } from './interfaces';
 
 const LEFT_N = 1; // left neighbor
 
@@ -18,20 +19,12 @@ export async function verifyChainHash(TreeHash: string, PreviousChainHash: strin
     }
 }
 
-export async function verifyProof(
-    Name: string,
-    Revision: number,
-    Proof: string,
-    Neighbors: string[],
-    TreeHash: string,
-    sklData: string,
-    email: string
-) {
+export async function verifyProof(proof: Proof, TreeHash: string, sklData: string, email: string) {
     // Verify proof
     const pkBuffer = Buffer.from(hexStringToArray(vrfHexKey));
     const emailBuffer = Buffer.from(binaryStringToArray(email));
-    const proofBuffer = Buffer.from(hexStringToArray(Proof));
-    const valueBuffer = Buffer.from(hexStringToArray(Name));
+    const proofBuffer = Buffer.from(hexStringToArray(proof.Proof));
+    const valueBuffer = Buffer.from(hexStringToArray(proof.Name));
 
     try {
         await vrfVerify(pkBuffer, emailBuffer, proofBuffer, valueBuffer);
@@ -43,15 +36,15 @@ export async function verifyProof(
     let val = await SHA256(
         concatArrays([
             await SHA256(binaryStringToArray(sklData)),
-            new Uint8Array([Revision >>> 24, Revision >>> 16, Revision >>> 8, Revision]),
+            new Uint8Array([proof.Revision >>> 24, proof.Revision >>> 16, proof.Revision >>> 8, proof.Revision]),
         ])
     );
     const emptyNode = new Uint8Array(32);
-    const key = hexStringToArray(Name);
+    const key = hexStringToArray(proof.Name);
 
-    for (let i = Neighbors.length - 1; i >= 0; i--) {
+    for (let i = proof.Neighbors.length - 1; i >= 0; i--) {
         const bit = (key[Math.floor(i / 8) % 32] >>> (8 - (i % 8) - 1)) & 1;
-        const neighbor = Neighbors[i] === null ? emptyNode : hexStringToArray(Neighbors[i]);
+        const neighbor = proof.Neighbors[i] === null ? emptyNode : hexStringToArray(proof.Neighbors[i]);
         const toHash = bit === LEFT_N ? concatArrays([neighbor, val]) : concatArrays([val, neighbor]);
         val = await SHA256(toHash);
     }
