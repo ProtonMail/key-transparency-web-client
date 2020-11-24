@@ -105,7 +105,7 @@ describe('key transparency', () => {
             mockApi(epoch, proof, mockAddress)
         );
         expect(result.code).toEqual(KT_STATUS.KT_FAILED);
-        expect(result.error).toEqual('Signature verification failed');
+        expect(result.error).toEqual('Signature verification failed (SKL during PK verification)');
     });
 
     it('should fail signed key list check', async () => {
