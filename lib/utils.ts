@@ -182,7 +182,7 @@ export function getSignatureTime(signature: OpenPGPSignature): number {
     return (packet as any).created.getTime();
 }
 
-export function compareTimes(time: number, refereceTime?: number) {
+export function isTimetampTooOld(time: number, refereceTime?: number) {
     if (!refereceTime) {
         refereceTime = Date.now();
     }
@@ -194,7 +194,7 @@ export async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email
 
     const returnedDate: number = await verifyEpoch(currentEpoch, email, signedKeyList.Data, api);
 
-    if (compareTimes(returnedDate)) {
+    if (isTimetampTooOld(returnedDate)) {
         throw new Error('Returned date is older than MAX_EPOCH_INTERVAL');
     }
 

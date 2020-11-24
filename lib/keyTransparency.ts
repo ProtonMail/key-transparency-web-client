@@ -1,11 +1,10 @@
-import { OpenPGPKey, getKeys, getSignature, signMessage, encryptMessage, decryptMessage, getMessage } from 'pmcrypto';
+import { OpenPGPKey, getKeys, getSignature, encryptMessage, decryptMessage, getMessage } from 'pmcrypto';
 import { Api } from './helpers/interfaces/Api';
 import { Address } from './helpers/interfaces/Address';
 import { CachedKey } from './helpers/interfaces/CachedKey';
 import { Epoch, EpochExtended } from './interfaces';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
-import { uploadVerifiedEpoch } from './helpers/api/keyTransparency';
-import { getParsedSignedKeyLists, fetchProof, fetchEpoch, getVerifiedEpoch } from './fetchHelper';
+import { getParsedSignedKeyLists, fetchProof, fetchEpoch, getVerifiedEpoch, uploadEpoch } from './fetchHelper';
 import { getItem, setItem, removeItem, hasStorage } from './helpers/storage';
 import { getCanonicalEmailMap } from './helpers/api/canonicalEmailMap';
 import { KT_STATUS, MAX_EPOCH_INTERVAL, EXP_EPOCH_INTERVAL } from './constants';
@@ -13,7 +12,7 @@ import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
     getSignatureTime,
-    compareTimes,
+    isTimetampTooOld,
     parseKeyLists,
     verifyCurrentEpoch,
     verifyEpoch,
@@ -96,7 +95,7 @@ export async function verifyPublicKeys(
         return { code: KT_STATUS.KT_FAILED, error: err.message };
     }
 
-    if (compareTimes(returnedDate)) {
+    if (isTimetampTooOld(returnedDate)) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: 'Returned date is older than the maximum epoch interval',
@@ -253,7 +252,7 @@ export async function ktSelfAudit(
                     }
                     const includedSignature = await getSignature(includedSKL.Signature);
 
-                    if (compareTimes(getSignatureTime(localSignature), getSignatureTime(includedSignature))) {
+                    if (isTimetampTooOld(getSignatureTime(localSignature), getSignatureTime(includedSignature))) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
                             error:
@@ -287,7 +286,7 @@ export async function ktSelfAudit(
 
                         const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
 
-                        if (compareTimes(getSignatureTime(localSignature), returnedDate)) {
+                        if (isTimetampTooOld(getSignatureTime(localSignature), returnedDate)) {
                             addressesToVerifiedEpochs.set(address.ID, {
                                 code: KT_STATUS.KT_FAILED,
                                 error:
@@ -298,7 +297,7 @@ export async function ktSelfAudit(
                         }
 
                         removeItem(`kt:${i}:${address.ID}`);
-                    } else if (compareTimes(getSignatureTime(localSignature))) {
+                    } else if (isTimetampTooOld(getSignatureTime(localSignature))) {
                         addressesToVerifiedEpochs.set(address.ID, {
                             code: KT_STATUS.KT_FAILED,
                             error: 'Signed key list in localStorage is older than MAX_EPOCH_INTERVAL',
@@ -340,8 +339,9 @@ export async function ktSelfAudit(
             continue;
         }
 
+        // If its MinEpochID is null, the SKL must be recent
         const signatureSKL = await getSignature(address.SignedKeyList.Signature);
-        if (address.SignedKeyList.MinEpochID === null && compareTimes(getSignatureTime(signatureSKL))) {
+        if (address.SignedKeyList.MinEpochID === null && isTimetampTooOld(getSignatureTime(signatureSKL))) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
                 error: 'Signed key list is older than MAX_EPOCH_INTERVAL',
@@ -349,8 +349,11 @@ export async function ktSelfAudit(
             continue;
         }
 
+        // Fetch the last verified epoch. If there isn't any, the address is recent
         const verifiedEpoch = await getVerifiedEpoch(silentApi, address.ID);
         if (!verifiedEpoch) {
+            // If the MinEpochID is null the address was created after the last epoch generation, therefore
+            // self-audit is postponed at least until the SKL is included in the next epoch
             if (address.SignedKeyList.MinEpochID === null) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_WARNING,
@@ -375,10 +378,14 @@ export async function ktSelfAudit(
                 verifiedEpoch: verifiedCurrent,
                 error: '',
             });
+            uploadEpoch(verifiedCurrent, address, api);
             continue;
         }
+        const verifiedEpochData: { EpochID: number; ChainHash: string; CertificateDate: number } = JSON.parse(
+            verifiedEpoch.Data
+        );
 
-        // Check signature
+        // Check signature of verified epoch
         try {
             await checkSignature(
                 verifiedEpoch.Data,
@@ -394,23 +401,26 @@ export async function ktSelfAudit(
             continue;
         }
 
-        const verifiedEpochData = JSON.parse(verifiedEpoch.Data);
-
         // Fetch all new SKLs and corresponding epochs
-        const newerSKLs = await getParsedSignedKeyLists(api, verifiedEpochData.EpochID, email, true);
+        const newSKLs = await getParsedSignedKeyLists(api, verifiedEpochData.EpochID, email, true);
 
-        if (newerSKLs.length > 3) {
+        // There can be at most three SKLs in newSKLs:
+        //   - the last one before verifiedEpochData.EpochID (i.e. the old one);
+        //   - a new SKL uploaded between verifiedEpochData.EpochID and (verifiedEpochData.EpochID + 1)
+        //   - a new SKL uploaded between (verifiedEpochData.EpochID + 1) and the current self-audit
+        if (newSKLs.length === 0 || newSKLs.length > 3) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
-                error: 'More than 3 SKLs found',
+                error: 'There should be between 1 and 3 fetched SKLs',
             });
             continue;
         }
 
-        // The epochs are fetched according to when SKLs changed. There could be at most one such that MinEpochID is null.
-        // That's excluded because it does not belong to any epoch.
-        const newerEpochs: EpochExtended[] = await Promise.all(
-            newerSKLs
+        // The epochs are fetched according to when SKLs changed. There could be at most one SKL such that
+        // MinEpochID is null, which is excluded because it does not belong to any epoch. Therefore, newEpochs
+        // should have at most 2 elements.
+        const newEpochs: EpochExtended[] = await Promise.all(
+            newSKLs
                 .filter((skl) => skl.MinEpochID !== null)
                 .map(async (skl) => {
                     const epoch = await fetchEpoch(skl.MinEpochID as number, api);
@@ -424,39 +434,56 @@ export async function ktSelfAudit(
                     };
                 })
         );
-
-        // Check revision consistency
-        try {
-            newerEpochs.reduce((previousEpoch, currentEpoch) => {
-                if (currentEpoch.Revision !== previousEpoch.Revision + 1) {
-                    throw new Error('Revisions for new signed key lists have not been incremented correctly');
-                }
-                return currentEpoch;
-            });
-        } catch (err) {
+        if (newEpochs.length !== 1 && newEpochs.length !== 2) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
-                error: err.message,
+                error: 'There should be 1 or 2 epochs',
+            });
+            continue;
+        }
+        // NOTE: if the existing SKL hadn't been changed in a while, the first element of newSKLs can be arbitrarily old,
+        // therefore the epoch corresponding to its MinEpochID will be older than verifiedEpoch.
+
+        // Check revision consistency
+        const checkRevision = newEpochs.reduce(
+            (previousElement, currentElement, currentIndex) => {
+                if (currentIndex === 0) {
+                    return [newEpochs[0], true];
+                }
+                return [
+                    currentElement,
+                    previousElement[1] &&
+                        (previousElement[0] as EpochExtended).Revision === currentElement.Revision + 1,
+                ];
+            },
+            [newEpochs[0], true]
+        );
+        if (!(checkRevision[1] as Boolean)) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Revisions for new signed key lists have not been incremented correctly',
             });
             continue;
         }
 
-        // If there aren't any new epochs in which a SKL changed, than newerEpochs will only have one element.
-        // That corresponds to the old SKL (NOTE: because any SKL with MinEpochID equal to null was ignored when constructing newerEpochs).
-        if (newerEpochs.length === 1) {
-            const [newestEpoch] = newerEpochs;
-            const newestSKL = newerSKLs.find((skl) => skl.MinEpochID === newestEpoch.EpochID);
-            if (!newestEpoch || !newestSKL) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Newest epoch is undefined',
-                });
-                continue;
-            }
+        // Extract the first SKL which, by construction of the getSignedKeyLists route, is the oldest
+        const [oldEpoch] = newEpochs;
+        const oldSKL = newSKLs.find((skl) => skl.MinEpochID === oldEpoch.EpochID);
+        if (!oldSKL) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Existing SKL not found',
+            });
+            continue;
+        }
+
+        // If there aren't any new SKLs, then newEpochs will only have one element: the last one before verifiedEpochData.EpochID.
+        // That's because the SKL with MinEpochID equal to null, if any, was ignored when constructing newEpochs.
+        if (newEpochs.length === 1) {
             // Verify current epoch
             let verifiedCurrent;
             try {
-                verifiedCurrent = await verifyCurrentEpoch(newestSKL, email, api);
+                verifiedCurrent = await verifyCurrentEpoch(oldSKL, email, api);
             } catch (err) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_FAILED,
@@ -469,70 +496,70 @@ export async function ktSelfAudit(
                 verifiedEpoch: verifiedCurrent,
                 error: '',
             });
+            uploadEpoch(verifiedCurrent, address, api);
             continue;
         }
 
-        let previousSKL;
-        if (address.SignedKeyList.MinEpochID === null || address.SignedKeyList.MinEpochID > newerEpochs[0].EpochID) {
-            // NOTE: "first" in 10c is interpreted as "in position 0", since getParsedSignedKeyLists returns ordered SKLs
-            previousSKL = newerSKLs.shift();
+        // Extract the second SKL which, by construction of the getSignedKeyLists route, is immediately younger
+        // or equal to the SKL given as input.
+        const [, epochToVerify] = newEpochs;
+        const previousSKL = newSKLs.find((skl) => skl.MinEpochID === epochToVerify.EpochID);
+        if (!previousSKL) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Previous SKL not found',
+            });
+            continue;
         }
 
-        for (let j = 0; j < newerEpochs.length; j++) {
-            const epoch = newerEpochs[j];
+        // Verify the newest epoch
+        if (epochToVerify.EpochID <= verifiedEpochData.EpochID) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Current epoch is older than or equal to verified epoch',
+            });
+            continue;
+        }
 
-            const previousEpoch = j === 0 ? verifiedEpochData : newerEpochs[j - 1];
-            if (epoch.EpochID <= previousEpoch.EpochID) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Current epoch is older than or equal to previous epoch',
-                });
-                continue;
-            }
+        const includedSKL =
+            address.SignedKeyList.MinEpochID === null || address.SignedKeyList.MinEpochID > epochToVerify.EpochID
+                ? previousSKL
+                : address.SignedKeyList;
 
-            const includedSKL =
-                address.SignedKeyList.MinEpochID === null ||
-                (address.SignedKeyList.MinEpochID > epoch.EpochID && previousSKL)
-                    ? previousSKL
-                    : address.SignedKeyList;
+        if (!includedSKL) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Included SKL could not be defined',
+            });
+            continue;
+        }
 
-            if (!includedSKL) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Included SKL could not be defined',
-                });
-                continue;
-            }
+        epochToVerify.CertificateDate = await verifyEpoch(epochToVerify, email, includedSKL.Data, api);
 
-            epoch.CertificateDate = await verifyEpoch(epoch, email, includedSKL.Data, api);
+        if (
+            epochToVerify.CertificateDate < verifiedEpochData.CertificateDate &&
+            isTimetampTooOld(verifiedEpochData.CertificateDate, epochToVerify.CertificateDate)
+        ) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: 'Certificate date control error',
+            });
+            continue;
+        }
 
-            if (
-                epoch.CertificateDate < previousEpoch.CertificateDate &&
-                compareTimes(previousEpoch.CertificateDate, epoch.CertificateDate)
-            ) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error: 'Certificate date control error',
-                });
-                continue;
-            }
-
-            if (
-                address.SignedKeyList.MinEpochID === null ||
-                (address.SignedKeyList.MinEpochID > epoch.EpochID &&
-                    compareTimes(getSignatureTime(signatureSKL), epoch.CertificateDate))
-            ) {
-                addressesToVerifiedEpochs.set(address.ID, {
-                    code: KT_STATUS.KT_FAILED,
-                    error:
-                        "The certificate date is older than signed key list's signature by more than MAX_EPOCH_INTERVAL",
-                });
-                continue;
-            }
+        if (
+            (address.SignedKeyList.MinEpochID === null || address.SignedKeyList.MinEpochID > epochToVerify.EpochID) &&
+            isTimetampTooOld(getSignatureTime(signatureSKL), epochToVerify.CertificateDate)
+        ) {
+            addressesToVerifiedEpochs.set(address.ID, {
+                code: KT_STATUS.KT_FAILED,
+                error: "The certificate date is older than signed key list's signature by more than MAX_EPOCH_INTERVAL",
+            });
+            continue;
         }
 
         // Chech latest certificate is within acceptable range
-        if (newerEpochs[newerEpochs.length - 1].CertificateDate >= MAX_EPOCH_INTERVAL) {
+        if (epochToVerify.CertificateDate >= MAX_EPOCH_INTERVAL) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
                 error: 'Last certificate date is older than MAX_EPOCH_INTERVAL',
@@ -543,31 +570,10 @@ export async function ktSelfAudit(
         // Set output for current address
         addressesToVerifiedEpochs.set(address.ID, {
             code: KT_STATUS.KT_PASSED,
-            verifiedEpoch: newerEpochs[newerEpochs.length - 1],
+            verifiedEpoch: epochToVerify,
             error: '',
         });
-
-        // Upload verified epoch for current address
-        const bodyData = JSON.stringify({
-            EpochID: newerEpochs[newerEpochs.length - 1].EpochID,
-            ChainHash: newerEpochs[newerEpochs.length - 1].ChainHash,
-            CertificateDate: newerEpochs[newerEpochs.length - 1].CertificateDate,
-        });
-
-        const [privateKey] = address.Keys.map((key) => key.PrivateKey);
-        await api(
-            uploadVerifiedEpoch({
-                AddressID: address.ID,
-                Data: bodyData,
-                Signature: (
-                    await signMessage({
-                        data: bodyData,
-                        privateKeys: await getKeys(privateKey),
-                        detached: true,
-                    })
-                ).signature,
-            })
-        );
+        uploadEpoch(epochToVerify, address, api);
     }
 
     return addressesToVerifiedEpochs;
@@ -610,7 +616,7 @@ export async function updateKT(
 
     const { verifiedEpoch } = ktResult;
 
-    if (compareTimes(verifiedEpoch.CertificateDate)) {
+    if (isTimetampTooOld(verifiedEpoch.CertificateDate)) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: `Verified epoch for ${address.Email} is older than MAX_EPOCH_INTERVAL`,

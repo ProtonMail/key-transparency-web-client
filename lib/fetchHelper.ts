@@ -1,5 +1,7 @@
+import { getKeys, signMessage } from 'pmcrypto';
 import { getSignedKeyLists } from './helpers/api/keys';
-import { getCertificate, getLatestVerifiedEpoch, getProof } from './helpers/api/keyTransparency';
+import { getCertificate, getLatestVerifiedEpoch, getProof, uploadVerifiedEpoch } from './helpers/api/keyTransparency';
+import { Address } from './helpers/interfaces/Address';
 import { Api } from './helpers/interfaces/Api';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { EpochExtended, Proof } from './interfaces';
@@ -62,4 +64,27 @@ export async function getVerifiedEpoch(
     }
 
     return verifiedEpoch;
+}
+
+export async function uploadEpoch(epoch: EpochExtended, address: Address, api: Api) {
+    const bodyData = JSON.stringify({
+        EpochID: epoch.EpochID,
+        ChainHash: epoch.ChainHash,
+        CertificateDate: epoch.CertificateDate,
+    });
+
+    const [privateKey] = address.Keys.map((key) => key.PrivateKey);
+    await api(
+        uploadVerifiedEpoch({
+            AddressID: address.ID,
+            Data: bodyData,
+            Signature: (
+                await signMessage({
+                    data: bodyData,
+                    privateKeys: await getKeys(privateKey),
+                    detached: true,
+                })
+            ).signature,
+        })
+    );
 }
