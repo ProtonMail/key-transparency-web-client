@@ -16,6 +16,7 @@ import { fetchProof, fetchEpoch } from './fetchHelper';
 import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from './certTransparency';
 import { verifyProof, verifyChainHash } from './merkleTree';
 import { MAX_EPOCH_INTERVAL } from './constants';
+import { getItem, hasStorage, removeItem } from './helpers/storage';
 
 export function compareKeyInfo(keyInfo: KeyInfo, sklKeyInfo: KeyInfo) {
     // Check fingerprints
@@ -205,4 +206,65 @@ export async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email
         Revision,
         CertificateDate: returnedDate,
     } as EpochExtended;
+}
+
+export function getKTBlobs(addressID: string) {
+    const returnedMap: Map<string, string> = new Map();
+
+    if (!hasStorage()) {
+        return returnedMap;
+    }
+
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) {
+            continue;
+        }
+        const splitKey = key.split(':');
+        if (splitKey[0] === 'kt' && splitKey[2] === addressID) {
+            returnedMap.set(key, getItem(key) as string);
+        }
+    }
+
+    return returnedMap;
+}
+
+export function getFromLS(addressID: string): string[] {
+    if (!hasStorage()) {
+        return [];
+    }
+
+    const ktBlobs = getKTBlobs(addressID);
+
+    const values: string[] = [];
+    for (const element of ktBlobs) {
+        const [key, value] = element;
+        const splitKey = key.split(':');
+        values[parseInt(splitKey[1], 10)] = value;
+    }
+
+    return values;
+}
+
+export function removeFromLS(index: number, addressID: string) {
+    if (!hasStorage()) {
+        throw new Error('localStorage unavailable');
+    }
+
+    const ktBlobs = getKTBlobs(addressID);
+
+    let removed = false;
+    for (const element of ktBlobs) {
+        const [key] = element;
+        const splitKey = key.split(':');
+        if (splitKey[1] === `${index}`) {
+            removeItem(key);
+            removed = true;
+            break;
+        }
+    }
+
+    if (!removed) {
+        throw new Error('Cannot remove blob from localStorage');
+    }
 }

@@ -1,13 +1,24 @@
 import { getKeys, signMessage } from 'pmcrypto';
 import { getSignedKeyLists } from './helpers/api/keys';
-import { getCertificate, getLatestVerifiedEpoch, getProof, uploadVerifiedEpoch } from './helpers/api/keyTransparency';
+import {
+    getCertificate,
+    getEpochs,
+    getLatestVerifiedEpoch,
+    getProof,
+    uploadVerifiedEpoch,
+} from './helpers/api/keyTransparency';
 import { Address } from './helpers/interfaces/Address';
 import { Api } from './helpers/interfaces/Api';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
-import { EpochExtended, Proof } from './interfaces';
+import { Epoch, EpochExtended, Proof } from './interfaces';
 
 const cachedEpochs: Map<number, EpochExtended> = new Map();
 const cachedProofs: Map<[string, number], Proof> = new Map();
+
+export async function fetchLastEpoch(api: Api) {
+    const epoch: { Code: number; Epochs: Epoch[] } = await api(getEpochs({}));
+    return epoch.Epochs[0].EpochID;
+}
 
 export async function fetchEpoch(epochID: number, api: Api) {
     const cachedEpoch = cachedEpochs.get(epochID);
