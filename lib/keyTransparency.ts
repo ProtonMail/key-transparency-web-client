@@ -3,7 +3,7 @@ import { Api } from './helpers/interfaces/Api';
 import { Address } from './helpers/interfaces/Address';
 import { CachedKey } from './helpers/interfaces/CachedKey';
 import { Epoch, EpochExtended } from './interfaces';
-import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
+import { SignedKeyList, SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import {
     getParsedSignedKeyLists,
     fetchProof,
@@ -627,6 +627,7 @@ export async function ktSelfAudit(
 
 export async function updateKT(
     address: Address,
+    submittedSKL: SignedKeyList,
     ktSelfAuditResult: Map<
         string,
         {
@@ -672,7 +673,7 @@ export async function updateKT(
 
     const message = JSON.stringify({
         Epoch: verifiedEpoch,
-        SignedKeyList: address.SignedKeyList,
+        SignedKeyList: submittedSKL,
     });
 
     if (hasStorage()) {
@@ -695,7 +696,7 @@ export async function updateKT(
                     removeItem(key);
                     setItem(`kt:0:${address.ID}:${splitKey[3]}`, ktBlobs.get(key) as string);
                 }
-                counter = splitKey[3] !== `${currentEpoch}` ? counter++ : counter;
+                counter = splitKey[3] !== `${currentEpoch}` ? 1 : 0;
                 break;
             }
             case 2: {
@@ -710,7 +711,7 @@ export async function updateKT(
                         if (splitKey[3] > `${currentEpoch}`) {
                             return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
                         }
-                        counter++;
+                        counter = 1;
                     }
                 }
                 break;
