@@ -96,6 +96,20 @@ export async function verifyKeyLists(
     });
 }
 
+export function extractNotBefore(cert: string) {
+    let certificate: Certificate;
+    try {
+        certificate = parseCertificate(cert);
+    } catch (err) {
+        throw new Error(`Certificate parsing failed with error: ${err.message}`);
+    }
+    if (!certificate) {
+        throw new Error('Certificate is undefined');
+    }
+
+    return certificate.notBefore.toJSON().value.getTime();
+}
+
 export async function verifyEpoch(
     epoch: Epoch,
     email: string,

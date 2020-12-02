@@ -18,6 +18,7 @@ import { KT_STATUS, EXP_EPOCH_INTERVAL } from './constants';
 import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
+    extractNotBefore,
     getFromLS,
     getKTBlobs,
     getSignatureTime,
@@ -40,7 +41,7 @@ export async function verifyPublicKeys(
 ): Promise<{ code: KT_STATUS; error: string }> {
     if (!signedKeyList) {
         return {
-            code: KT_STATUS.KT_WARNING,
+            code: KT_STATUS.KT_FAILED,
             error: 'Signed key list undefined',
         };
     }
@@ -217,7 +218,7 @@ export async function ktSelfAudit(
         for (let i = 0; i < ktBlobs.length; i++) {
             const ktBlob = ktBlobs[i];
             if (ktBlob) {
-                // Decrypt and parektBlob
+                // Decrypt and parse ktBlob
                 let decryptedBlob;
                 try {
                     decryptedBlob = JSON.parse(
@@ -236,21 +237,24 @@ export async function ktSelfAudit(
                     errorFlag = true;
                     break;
                 }
-                const { SignedKeyList: localSKL, Epoch: localEpoch } = decryptedBlob;
+                const { SignedKeyList: localSKL, EpochID: localEpochID } = decryptedBlob;
                 const localSignature = await getSignature(localSKL.Signature);
 
-                // Retrieve oldest SKL since localEpoch.EpochID
-                const fetchedSKLs = await getParsedSignedKeyLists(api, localEpoch.EpochID, email, false);
+                // Retrieve oldest SKL since localEpochID
+                const fetchedSKLs = await getParsedSignedKeyLists(api, localEpochID, email, false);
                 const includedSKLarray: SignedKeyListInfo[] = await Promise.all(
                     fetchedSKLs.filter(async (skl) => {
                         const sklSignature = await getSignature(skl.Signature);
                         return (
-                            (skl.MinEpochID === null || skl.MinEpochID > localEpoch.EpochID) &&
+                            (skl.MinEpochID === null || skl.MinEpochID > localEpochID) &&
                             getSignatureTime(sklSignature) >= getSignatureTime(localSignature)
                         );
                     })
                 );
-                const [includedSKL] = includedSKLarray;
+
+                // If we are checking the first blob, then included SKL should be the oldest, otherwise it
+                // should be the one immediately after.
+                const includedSKL = includedSKLarray[i];
                 if (!includedSKL) {
                     addressesToVerifiedEpochs.set(address.ID, {
                         code: KT_STATUS.KT_FAILED,
@@ -471,7 +475,7 @@ export async function ktSelfAudit(
                     };
                 })
         );
-        // NOTE: if the existing SKL hadn't been changed in a while, the first element of newSKLs can be arbitrarily old,
+        // NOTE: if the old SKL hadn't been changed in a while, the first element of newSKLs can be arbitrarily old,
         // therefore the epoch corresponding to its MinEpochID will be older than verifiedEpoch.
 
         // Check revision consistency
@@ -496,9 +500,8 @@ export async function ktSelfAudit(
             continue;
         }
 
-        // If there aren't any new SKLs, then newEpochs will only have one element: the last one before verifiedEpochData.EpochID.
-        // That's because the SKL with MinEpochID equal to null, if any, was ignored when constructing newEpochs and will be checked
-        // in the next self-audit.
+        // If there aren't any new SKLs or if the latest SKL has MinEpochID equal to null,
+        // then newEpochs will only have one element: the last one before verifiedEpochData.EpochID.
         if (newEpochs.length === 1) {
             // Extract the first SKL which, by construction of the getSignedKeyLists route, is the oldest
             const [oldSKL] = newSKLs;
@@ -605,7 +608,7 @@ export async function ktSelfAudit(
         }
 
         // Check latest certificate is within acceptable range
-        if ((isTimestampTooOld(newEpochs[newEpochs.length - 1].CertificateDate), getSignatureTime(signatureSKL))) {
+        if (isTimestampTooOld(newEpochs[newEpochs.length - 1].CertificateDate, getSignatureTime(signatureSKL))) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
                 error: 'Last certificate date is older than the last signed key list by more than MAX_EPOCH_INTERVAL',
@@ -632,7 +635,7 @@ export async function updateKT(
         string,
         {
             code: KT_STATUS;
-            verifiedEpoch: EpochExtended;
+            verifiedEpoch?: EpochExtended;
             error: string;
         }
     >,
@@ -640,39 +643,63 @@ export async function updateKT(
     isRunning: boolean,
     userKeys: CachedKey[],
     api: Api
-): Promise<{ code: KT_STATUS; error: string }> {
+): Promise<{ code: KT_STATUS; error: string; message: string }> {
     if (isRunning) {
-        return { code: KT_STATUS.KT_WARNING, error: 'Self-audit is still running' };
+        return { code: KT_STATUS.KT_FAILED, error: 'Self-audit is still running', message: '' };
     }
 
     if (Date.now() - lastSelfAudit > EXP_EPOCH_INTERVAL) {
-        return { code: KT_STATUS.KT_WARNING, error: 'Self-audit should run before proceeding' };
+        return { code: KT_STATUS.KT_FAILED, error: 'Self-audit should run before proceeding', message: '' };
     }
 
     const ktResult = ktSelfAuditResult.get(address.ID);
 
     if (!ktResult) {
-        return { code: KT_STATUS.KT_FAILED, error: `${address.Email} was never audited` };
+        return { code: KT_STATUS.KT_FAILED, error: `${address.Email} was not audited`, message: '' };
     }
 
-    if (ktResult.code !== KT_STATUS.KT_PASSED) {
+    if (ktResult.code === KT_STATUS.KT_FAILED) {
         return {
             code: KT_STATUS.KT_FAILED,
             error: `Self-audit failed for ${address.Email} with error "${ktResult.error}"`,
+            message: '',
         };
     }
 
-    const { verifiedEpoch } = ktResult;
+    let verifiedEpoch;
+    if (ktResult.code === KT_STATUS.KT_WARNING) {
+        // Last epoch before address creation
+        const lastEpochID = await fetchLastEpoch(api);
+        const lastEpoch = await fetchEpoch(lastEpochID, api);
+        verifiedEpoch = {
+            ...lastEpoch,
+            Revision: 0,
+            CertificateDate: extractNotBefore(lastEpoch.Certificate),
+        };
+    } else {
+        verifiedEpoch = ktResult.verifiedEpoch;
+    }
 
-    if (isTimestampTooOld(verifiedEpoch.CertificateDate)) {
+    if (!verifiedEpoch) {
         return {
             code: KT_STATUS.KT_FAILED,
-            error: `Verified epoch for ${address.Email} is older than MAX_EPOCH_INTERVAL`,
+            error: 'Verified epoch not found',
+            message: '',
+        };
+    }
+
+    if (
+        isTimestampTooOld(verifiedEpoch.CertificateDate, getSignatureTime(await getSignature(submittedSKL.Signature)))
+    ) {
+        return {
+            code: KT_STATUS.KT_FAILED,
+            error: `Verified epoch for ${address.Email} has invalid CertificateDate`,
+            message: '',
         };
     }
 
     const message = JSON.stringify({
-        Epoch: verifiedEpoch,
+        EpochID: verifiedEpoch.EpochID,
         SignedKeyList: submittedSKL,
     });
 
@@ -690,7 +717,7 @@ export async function updateKT(
                 const key: string = ktBlobs.keys().next().value;
                 const splitKey = key.split(':');
                 if (splitKey[3] > `${currentEpoch}`) {
-                    return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
+                    return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage', message: '' };
                 }
                 if (splitKey[1] !== '0') {
                     removeItem(key);
@@ -705,11 +732,19 @@ export async function updateKT(
                     const splitKey = key.split(':');
                     if (splitKey[1] === '0') {
                         if (splitKey[3] >= `${currentEpoch}`) {
-                            return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
+                            return {
+                                code: KT_STATUS.KT_FAILED,
+                                error: 'Inconsistent data in localStorage',
+                                message: '',
+                            };
                         }
                     } else {
                         if (splitKey[3] > `${currentEpoch}`) {
-                            return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
+                            return {
+                                code: KT_STATUS.KT_FAILED,
+                                error: 'Inconsistent data in localStorage',
+                                message: '',
+                            };
                         }
                         counter = 1;
                     }
@@ -717,7 +752,7 @@ export async function updateKT(
                 break;
             }
             default:
-                return { code: KT_STATUS.KT_FAILED, error: 'There are too many blobs in localStorage' };
+                return { code: KT_STATUS.KT_FAILED, error: 'There are too many blobs in localStorage', message: '' };
         }
 
         // Save the new blob
@@ -742,7 +777,11 @@ export async function updateKT(
         });
 
         if (userPrimaryPublicKey.length === 0) {
-            return { code: KT_STATUS.KT_FAILED, error: 'No keys found to encrypt KT blob to localStorage' };
+            return {
+                code: KT_STATUS.KT_FAILED,
+                error: 'No keys found to encrypt KT blob to localStorage',
+                message: '',
+            };
         }
 
         setItem(
@@ -756,5 +795,5 @@ export async function updateKT(
         );
     }
 
-    return { code: KT_STATUS.KT_PASSED, error: '' };
+    return { code: KT_STATUS.KT_PASSED, error: '', message };
 }

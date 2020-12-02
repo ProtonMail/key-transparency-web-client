@@ -12,7 +12,7 @@ import { Api } from './helpers/interfaces/Api';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { Epoch, EpochExtended, Proof } from './interfaces';
 
-const cachedEpochs: Map<number, EpochExtended> = new Map();
+const cachedEpochs: Map<number, Epoch> = new Map();
 const cachedProofs: Map<[string, number], Proof> = new Map();
 
 export async function fetchLastEpoch(api: Api) {
@@ -27,9 +27,9 @@ export async function fetchEpoch(epochID: number, api: Api) {
     }
 
     const epoch = await api(getCertificate({ EpochID: epochID }));
-    cachedEpochs.set(epochID, epoch as EpochExtended);
+    cachedEpochs.set(epochID, epoch as Epoch);
 
-    return epoch as EpochExtended;
+    return epoch as Epoch;
 }
 
 export async function fetchProof(epochID: number, email: string, api: Api) {
