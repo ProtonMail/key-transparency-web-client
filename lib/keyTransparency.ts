@@ -628,7 +628,7 @@ export async function ktSelfAudit(
     return addressesToVerifiedEpochs;
 }
 
-export async function updateKT(
+export async function verifySelfAuditResult(
     address: Address,
     submittedSKL: SignedKeyList,
     ktSelfAuditResult: Map<
@@ -641,7 +641,6 @@ export async function updateKT(
     >,
     lastSelfAudit: number,
     isRunning: boolean,
-    userKeys: CachedKey[],
     api: Api
 ): Promise<{ code: KT_STATUS; error: string; message: string }> {
     if (isRunning) {
@@ -698,11 +697,22 @@ export async function updateKT(
         };
     }
 
-    const message = JSON.stringify({
-        EpochID: verifiedEpoch.EpochID,
-        SignedKeyList: submittedSKL,
-    });
+    return {
+        code: KT_STATUS.KT_PASSED,
+        error: '',
+        message: JSON.stringify({
+            EpochID: verifiedEpoch.EpochID,
+            SignedKeyList: submittedSKL,
+        }),
+    };
+}
 
+export async function ktSaveToLS(
+    message: string,
+    address: Address,
+    userKeys: CachedKey[],
+    api: Api
+): Promise<{ code: KT_STATUS; error: string }> {
     if (hasStorage()) {
         // Check if there is something in localStorage with counter either 0 or 1 and the previous or current epoch
         // Format is kt:{counter}:{address.ID}:{epoch}, therefore splitKey = [kt, {counter}, {address.ID}, {epoch}].
@@ -717,7 +727,7 @@ export async function updateKT(
                 const key: string = ktBlobs.keys().next().value;
                 const splitKey = key.split(':');
                 if (splitKey[3] > `${currentEpoch}`) {
-                    return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage', message: '' };
+                    return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
                 }
                 if (splitKey[1] !== '0') {
                     removeItem(key);
@@ -735,7 +745,6 @@ export async function updateKT(
                             return {
                                 code: KT_STATUS.KT_FAILED,
                                 error: 'Inconsistent data in localStorage',
-                                message: '',
                             };
                         }
                     } else {
@@ -743,7 +752,6 @@ export async function updateKT(
                             return {
                                 code: KT_STATUS.KT_FAILED,
                                 error: 'Inconsistent data in localStorage',
-                                message: '',
                             };
                         }
                         counter = 1;
@@ -752,7 +760,7 @@ export async function updateKT(
                 break;
             }
             default:
-                return { code: KT_STATUS.KT_FAILED, error: 'There are too many blobs in localStorage', message: '' };
+                return { code: KT_STATUS.KT_FAILED, error: 'There are too many blobs in localStorage' };
         }
 
         // Save the new blob
@@ -780,7 +788,6 @@ export async function updateKT(
             return {
                 code: KT_STATUS.KT_FAILED,
                 error: 'No keys found to encrypt KT blob to localStorage',
-                message: '',
             };
         }
 
@@ -795,5 +802,5 @@ export async function updateKT(
         );
     }
 
-    return { code: KT_STATUS.KT_PASSED, error: '', message };
+    return { code: KT_STATUS.KT_PASSED, error: '' };
 }
