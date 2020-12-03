@@ -34,7 +34,7 @@ export function checkAltName(certificate: Certificate, ChainHash: string, EpochI
     }
     const altName = altNamesExt.parsedValue.altNames[0].value;
     const domain = altNamesExt.parsedValue.altNames[1].value;
-    if (`${ChainHash.slice(0, 32)}.${ChainHash.slice(32)}.${EpochID}.0.${domain}` !== altName) {
+    if (`${ChainHash.slice(0, 32)}.${ChainHash.slice(32)}.${EpochID}.0.${domain.slice(6, domain.length)}` !== altName) {
         throw new Error('Epoch certificate alternative name does not match');
     }
 }
