@@ -629,7 +629,7 @@ export async function ktSelfAudit(
 }
 
 export async function verifySelfAuditResult(
-    address: Address,
+    address: Address | undefined,
     submittedSKL: SignedKeyList,
     ktSelfAuditResult: Map<
         string,
@@ -643,6 +643,10 @@ export async function verifySelfAuditResult(
     isRunning: boolean,
     api: Api
 ): Promise<{ code: KT_STATUS; error: string; message: string }> {
+    if (!address) {
+        return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined', message: '' };
+    }
+
     if (isRunning) {
         return { code: KT_STATUS.KT_FAILED, error: 'Self-audit is still running', message: '' };
     }
@@ -709,10 +713,14 @@ export async function verifySelfAuditResult(
 
 export async function ktSaveToLS(
     message: string,
-    address: Address,
+    address: Address | undefined,
     userKeys: CachedKey[],
     api: Api
 ): Promise<{ code: KT_STATUS; error: string }> {
+    if (!address) {
+        return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined' };
+    }
+
     if (hasStorage()) {
         // Check if there is something in localStorage with counter either 0 or 1 and the previous or current epoch
         // Format is kt:{counter}:{address.ID}:{epoch}, therefore splitKey = [kt, {counter}, {address.ID}, {epoch}].
