@@ -2,7 +2,9 @@ import * as asn1js from 'asn1js';
 import Certificate from 'pkijs/src/Certificate';
 import { verifySCTsForCertificate } from 'pkijs/src/SignedCertificateTimestampList';
 import { base64StringToUint8Array } from './helpers/encoding';
-import { ctLogs, LECert } from './constants';
+// TEMPORARY CHANGE FOR LEGACY EPOCHS
+import { ctLogs, LECert, oldLECert } from './constants';
+// END
 
 function pemToBinary(pem: string) {
     const lines = pem.split('\n');
@@ -33,22 +35,32 @@ export function checkAltName(certificate: Certificate, ChainHash: string, EpochI
         throw new Error('Epoch certificate does not have AltName extension');
     }
     const altName = altNamesExt.parsedValue.altNames[0].value;
-    const domain = altNamesExt.parsedValue.altNames[1].value;
-    if (`${ChainHash.slice(0, 32)}.${ChainHash.slice(32)}.${EpochID}.0.${domain.slice(6, domain.length)}` !== altName) {
+    let domain = altNamesExt.parsedValue.altNames[1].value;
+    // TEMPORARY CHANGE FOR LEGACY EPOCHS
+    domain = domain.length > 17 ? domain.slice(6, domain.length) : domain;
+    if (`${ChainHash.slice(0, 32)}.${ChainHash.slice(32)}.${EpochID}.0.${domain}` !== altName) {
+        // END
         throw new Error('Epoch certificate alternative name does not match');
     }
 }
 
 export async function verifyLEcert(certificate: Certificate) {
-    const asn1LE = asn1js.fromBER(pemToBinary(LECert));
-    const certLE = new Certificate({ schema: asn1LE.result });
+    const certLE = parseCertificate(LECert);
     const verified = await certificate.verify(certLE);
     if (!verified) {
+        // TEMPORARY CHANGE FOR LEGACY EPOCHS
+        const oldcertLE = parseCertificate(oldLECert);
+        if (await certificate.verify(oldcertLE)) return;
+        // END
         throw new Error("Epoch certificate did not pass verification against issuer's public key");
     }
 }
 
 export async function verifySCT(certificate: Certificate) {
+    // TEMPORARY CHANGE FOR LEGACY EPOCHS
+    const copyCert = new Certificate();
+    copyCert.fromSchema(certificate.toSchema());
+    // END
     const issuerCert = parseCertificate(LECert);
     let verificationResult: boolean[];
     try {
@@ -60,6 +72,20 @@ export async function verifySCT(certificate: Certificate) {
         return previous && current;
     });
     if (!verified) {
+        // TEMPORARY CHANGE FOR LEGACY EPOCHS
+        try {
+            if (
+                (await verifySCTsForCertificate(copyCert, parseCertificate(oldLECert), ctLogs)).reduce(
+                    (previous: boolean, current: boolean) => {
+                        return previous && current;
+                    }
+                )
+            )
+                return;
+        } catch (err) {
+            throw new Error(`SCT verification halted with error "${err.message}"`);
+        }
+        // END
         throw new Error('SCT verification failed');
     }
 }
