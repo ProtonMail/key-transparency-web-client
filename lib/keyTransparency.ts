@@ -109,7 +109,7 @@ export async function verifyPublicKeys(
     if (isTimestampTooOld(returnedDate)) {
         return {
             code: KT_STATUS.KT_FAILED,
-            error: 'Returned date is older than the maximum epoch interval',
+            error: 'Returned date is older than MAX_EPOCH_INTERVAL',
         };
     }
 
@@ -479,20 +479,11 @@ export async function ktSelfAudit(
         // therefore the epoch corresponding to its MinEpochID will be older than verifiedEpoch.
 
         // Check revision consistency
-        const checkRevision = newEpochs.reduce(
-            (previousElement, currentElement, currentIndex) => {
-                if (currentIndex === 0) {
-                    return [newEpochs[0], true];
-                }
-                return [
-                    currentElement,
-                    previousElement[1] &&
-                        (previousElement[0] as EpochExtended).Revision === currentElement.Revision + 1,
-                ];
-            },
-            [newEpochs[0], true]
-        );
-        if (!(checkRevision[1] as Boolean)) {
+        let checkRevision = true;
+        for (let j = 1; j < newEpochs.length; j++) {
+            checkRevision = checkRevision && newEpochs[j].Revision === newEpochs[j - 1].Revision + 1;
+        }
+        if (!checkRevision) {
             addressesToVerifiedEpochs.set(address.ID, {
                 code: KT_STATUS.KT_FAILED,
                 error: 'Revisions for new signed key lists have not been incremented correctly',
