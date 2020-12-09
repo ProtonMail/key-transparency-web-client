@@ -68,7 +68,7 @@ describe('key transparency', () => {
     it('should verify public keys and fail when it checks the certificate returnedDate', async () => {
         const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi(epoch, proof, mockAddress));
         expect(result.code).toEqual(KT_STATUS.KT_FAILED);
-        expect(result.error).toEqual('Returned date is older than the maximum epoch interval');
+        expect(result.error).toEqual('Returned date is older than MAX_EPOCH_INTERVAL');
     });
 
     it('should warn that public keys are too young to be verified', async () => {
