@@ -8,12 +8,11 @@ import {
     createMessage,
     OpenPGPSignature,
 } from 'pmcrypto';
-import Certificate from 'pkijs/src/Certificate';
 import { Api } from './helpers/interfaces/Api';
 import { Epoch, EpochExtended, KeyInfo } from './interfaces';
 import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { fetchProof, fetchEpoch } from './fetchHelper';
-import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from './certTransparency';
+import { checkAltName, verifyLEcert, verifySCT, parseCertChain } from './certTransparency';
 import { verifyProof, verifyChainHash } from './merkleTree';
 import { MAX_EPOCH_INTERVAL } from './constants';
 import { getItem, hasStorage, removeItem } from './helpers/storage';
@@ -96,20 +95,6 @@ export async function verifyKeyLists(
     });
 }
 
-export function extractNotBefore(cert: string) {
-    let certificate: Certificate;
-    try {
-        certificate = parseCertificate(cert);
-    } catch (err) {
-        throw new Error(`Certificate parsing failed with error: ${err.message}`);
-    }
-    if (!certificate) {
-        throw new Error('Certificate is undefined');
-    }
-
-    return certificate.notBefore.toJSON().value.getTime();
-}
-
 export async function verifyEpoch(
     epoch: Epoch,
     email: string,
@@ -123,28 +108,22 @@ export async function verifyEpoch(
     // Verify ChainHash
     await verifyChainHash(epoch.TreeHash, epoch.PrevChainHash, epoch.ChainHash);
 
-    // Parse and verify certificate
-    let certificate: Certificate;
-    try {
-        certificate = parseCertificate(epoch.Certificate);
-    } catch (err) {
-        throw new Error(`Certificate parsing failed with error: ${err.message}`);
-    }
-    if (!certificate) {
-        throw new Error('Certificate is undefined');
-    }
-    checkAltName(certificate, epoch.ChainHash, epoch.EpochID);
-    await verifyLEcert(certificate);
-    await verifySCT(certificate);
+    // Parse and verify certificates
+    const certChain = parseCertChain(epoch.Certificate);
+    const epochCert = certChain[0];
+    const issuerCert = certChain[1];
+    await verifyLEcert(certChain);
+    checkAltName(epochCert, epoch.ChainHash, epoch.EpochID);
+    await verifySCT(epochCert, issuerCert);
 
     let returnedDate: number;
-    switch (certificate.notBefore.toJSON().type) {
+    switch (epochCert.notBefore.toJSON().type) {
         case 0:
         case 1:
-            returnedDate = certificate.notBefore.toJSON().value.getTime();
+            returnedDate = epochCert.notBefore.toJSON().value.getTime();
             break;
         default:
-            throw new Error(`Certificate's notBefore date is invalid (type = ${certificate.notBefore.toJSON().type})`);
+            throw new Error(`Certificate's notBefore date is invalid (type = ${epochCert.notBefore.toJSON().type})`);
     }
 
     return returnedDate;

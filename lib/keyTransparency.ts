@@ -18,7 +18,6 @@ import { KT_STATUS, EXP_EPOCH_INTERVAL } from './constants';
 import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
-    extractNotBefore,
     getFromLS,
     getKTBlobs,
     getSignatureTime,
@@ -29,6 +28,7 @@ import {
     verifyEpoch,
     verifyKeyLists,
 } from './utils';
+import { parseCertChain } from './certTransparency';
 
 export async function verifyPublicKeys(
     keyList: {
@@ -665,10 +665,11 @@ export async function verifySelfAuditResult(
         // Last epoch before address creation
         const lastEpochID = await fetchLastEpoch(api);
         const lastEpoch = await fetchEpoch(lastEpochID, api);
+        const lastEpochCert = parseCertChain(lastEpoch.Certificate)[0];
         verifiedEpoch = {
             ...lastEpoch,
             Revision: 0,
-            CertificateDate: extractNotBefore(lastEpoch.Certificate),
+            CertificateDate: lastEpochCert.notBefore.toJSON().value.getTime(),
         };
     } else {
         verifiedEpoch = ktResult.verifiedEpoch;

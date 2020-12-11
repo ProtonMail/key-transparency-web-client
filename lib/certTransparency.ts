@@ -2,7 +2,7 @@ import * as asn1js from 'asn1js';
 import Certificate from 'pkijs/src/Certificate';
 import { verifySCTsForCertificate } from 'pkijs/src/SignedCertificateTimestampList';
 import { base64StringToUint8Array } from './helpers/encoding';
-import { ctLogs, LECert } from './constants';
+import { ctLogs, coldCertificate } from './constants';
 
 function pemToBinary(pem: string) {
     const lines = pem.split('\n');
@@ -24,6 +24,32 @@ export function parseCertificate(cert: string) {
     return new Certificate({ schema: asn1Certificate.result });
 }
 
+export function parseCertChain(certChain: string) {
+    const certArr = certChain.split('-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----');
+    for (let i = 0; i < certArr.length; i++) {
+        switch (i) {
+            case 0:
+                certArr[i] = `${certArr[i]}-----END CERTIFICATE-----`;
+                break;
+            case certArr.length - 1:
+                certArr[i] = `-----BEGIN CERTIFICATE-----${certArr[i]}`;
+                break;
+            default:
+                certArr[i] = `-----BEGIN CERTIFICATE-----${certArr[i]}-----END CERTIFICATE-----`;
+                break;
+        }
+    }
+    const result = [];
+    for (let i = 0; i < certArr.length; i++) {
+        try {
+            result.push(parseCertificate(certArr[i]));
+        } catch (err) {
+            throw new Error(`Certificate[${i}] parsing failed with error: ${err.message}`);
+        }
+    }
+    return result;
+}
+
 export function checkAltName(certificate: Certificate, ChainHash: string, EpochID: number) {
     if (!certificate.extensions) {
         throw new Error('Epoch certificate does not have extensions');
@@ -39,16 +65,21 @@ export function checkAltName(certificate: Certificate, ChainHash: string, EpochI
     }
 }
 
-export async function verifyLEcert(certificate: Certificate) {
-    const certLE = parseCertificate(LECert);
-    const verified = await certificate.verify(certLE);
+export async function verifyLEcert(certChain: Certificate[]) {
+    let verificationCert = parseCertificate(coldCertificate);
+    let verified = true;
+    for (let i = certChain.length - 1; i >= 0; i--) {
+        verified = verified && (await certChain[i].verify(verificationCert));
+        verificationCert = certChain[i];
+    }
     if (!verified) {
-        throw new Error("Epoch certificate did not pass verification against issuer's public key");
+        throw new Error("Epoch certificate did not pass verification against issuer's certificate chain");
     }
 }
 
-export async function verifySCT(certificate: Certificate) {
-    const issuerCert = parseCertificate(LECert);
+export async function verifySCT(certificate: Certificate, issuerCert: Certificate) {
+    // issuerCert is the certificate that signed the epoch certificate. At this point we
+    // assume that issuerCert was already verified in the certificate chain.
     let verificationResult: boolean[];
     try {
         verificationResult = await verifySCTsForCertificate(certificate, issuerCert, ctLogs);

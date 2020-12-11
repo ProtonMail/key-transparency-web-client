@@ -1,15 +1,17 @@
 import * as asn1js from 'asn1js';
 import { epoch } from './keyTransparency.data';
-import { parseCertificate, checkAltName, verifyLEcert, verifySCT } from '../lib/certTransparency';
+import { parseCertChain, parseCertificate, checkAltName, verifyLEcert, verifySCT } from '../lib/certTransparency';
 
 describe('certificate transparency', () => {
     it('should verify a certificate', async () => {
         const { Certificate, ChainHash, EpochID } = epoch;
 
-        const cert = parseCertificate(Certificate);
-        checkAltName(cert, ChainHash, EpochID);
-        await verifyLEcert(cert);
-        await verifySCT(cert);
+        const certChain = parseCertChain(Certificate);
+        const epochCert = certChain[0];
+        const issuerCert = certChain[1];
+        await verifyLEcert(certChain);
+        checkAltName(epochCert, ChainHash, EpochID);
+        await verifySCT(epochCert, issuerCert);
     });
 
     it('should fail to parse with corrupt certificate', () => {
@@ -75,15 +77,17 @@ describe('certificate transparency', () => {
 
     it('should fail certificate verification', async () => {
         const { Certificate } = epoch;
-        const cert = parseCertificate(Certificate);
-        cert.tbs = new Uint8Array(10).buffer;
+        const certChain = parseCertChain(Certificate);
+        certChain[0].tbs = new Uint8Array(10).buffer;
 
         let errorThrown = true;
         try {
-            await verifyLEcert(cert);
+            await verifyLEcert(certChain);
             errorThrown = false;
         } catch (err) {
-            expect(err.message).toEqual("Epoch certificate did not pass verification against issuer's public key");
+            expect(err.message).toEqual(
+                "Epoch certificate did not pass verification against issuer's certificate chain"
+            );
         }
         expect(errorThrown).toEqual(true);
     });
@@ -144,12 +148,14 @@ describe('certificate transparency', () => {
 
     it('should fail in verifySCT with corrupt certificate', async () => {
         const { Certificate } = epoch;
-        const cert = parseCertificate(Certificate);
-        cert.serialNumber = new asn1js.Integer();
+        const certChain = parseCertChain(Certificate);
+        const epochCert = certChain[0];
+        const issuerCert = certChain[1];
+        epochCert.serialNumber = new asn1js.Integer();
 
         let errorThrown = true;
         try {
-            await verifySCT(cert);
+            await verifySCT(epochCert, issuerCert);
             errorThrown = false;
         } catch (err) {
             expect(err.message).toEqual('SCT verification failed');
