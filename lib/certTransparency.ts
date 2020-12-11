@@ -2,7 +2,7 @@ import * as asn1js from 'asn1js';
 import Certificate from 'pkijs/src/Certificate';
 import { verifySCTsForCertificate } from 'pkijs/src/SignedCertificateTimestampList';
 import { base64StringToUint8Array } from './helpers/encoding';
-import { ctLogs, coldCertificate } from './constants';
+import { ctLogs, rootCertificates } from './certificates';
 
 function pemToBinary(pem: string) {
     const lines = pem.split('\n');
@@ -65,10 +65,29 @@ export function checkAltName(certificate: Certificate, ChainHash: string, EpochI
     }
 }
 
+async function verifyTopCert(topCert: Certificate) {
+    let parentCAcert: Certificate;
+    try {
+        const parentName = topCert.issuer.typesAndValues.filter(
+            (issuerName) => issuerName.type.toString() === '2.5.4.3'
+        )[0];
+        const parentCN = parentName.value.valueBlock.value.split(' ').join('');
+        if (!Object.keys(rootCertificates).includes(parentCN)) return false;
+        parentCAcert = parseCertificate(rootCertificates[parentCN]);
+        console.log(parentCN);
+    } catch (err) {
+        return false;
+    }
+    return topCert.verify(parentCAcert);
+}
+
 export async function verifyLEcert(certChain: Certificate[]) {
-    let verificationCert = parseCertificate(coldCertificate);
+    let verificationCert = certChain[certChain.length - 1];
+    if (!(await verifyTopCert(verificationCert))) {
+        throw new Error('Epoch certificate did not pass verification of top certificate');
+    }
     let verified = true;
-    for (let i = certChain.length - 1; i >= 0; i--) {
+    for (let i = certChain.length - 2; i >= 0; i--) {
         verified = verified && (await certChain[i].verify(verificationCert));
         verificationCert = certChain[i];
     }
