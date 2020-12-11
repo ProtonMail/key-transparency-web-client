@@ -74,7 +74,6 @@ async function verifyTopCert(topCert: Certificate) {
         const parentCN = parentName.value.valueBlock.value.split(' ').join('');
         if (!Object.keys(rootCertificates).includes(parentCN)) return false;
         parentCAcert = parseCertificate(rootCertificates[parentCN]);
-        console.log(parentCN);
     } catch (err) {
         return false;
     }
