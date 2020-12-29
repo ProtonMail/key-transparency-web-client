@@ -13,11 +13,11 @@ import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import { Epoch, EpochExtended, Proof } from './interfaces';
 
 const cachedEpochs: Map<number, Epoch> = new Map();
-const cachedProofs: Map<[string, number], Proof> = new Map();
 
 export async function fetchLastEpoch(api: Api) {
     const epoch: { Code: number; Epochs: Epoch[] } = await api(getEpochs({}));
-    return epoch.Epochs[0].EpochID;
+    if (epoch.Code === 1000) return epoch.Epochs[0].EpochID;
+    throw new Error('Fetching last epoch failed');
 }
 
 export async function fetchEpoch(epochID: number, api: Api) {
@@ -26,22 +26,18 @@ export async function fetchEpoch(epochID: number, api: Api) {
         return cachedEpoch;
     }
 
-    const epoch = await api(getCertificate({ EpochID: epochID }));
-    cachedEpochs.set(epochID, epoch as Epoch);
-
-    return epoch as Epoch;
+    const { Code: code, ...epoch } = await api(getCertificate({ EpochID: epochID }));
+    if (code === 1000) {
+        cachedEpochs.set(epochID, epoch as Epoch);
+        return epoch as Epoch;
+    }
+    throw new Error(epoch.Error);
 }
 
 export async function fetchProof(epochID: number, email: string, api: Api) {
-    const cachedProof = cachedProofs.get([email, epochID]);
-    if (cachedProof) {
-        return cachedProof;
-    }
-
     const { Code: code, ...proof } = await api(getProof({ EpochID: epochID, Email: email }));
-    cachedProofs.set([email, epochID], proof as Proof);
-
-    return proof as Proof;
+    if (code === 1000) return proof as Proof;
+    throw new Error(proof.Error);
 }
 
 export async function getParsedSignedKeyLists(
@@ -50,9 +46,7 @@ export async function getParsedSignedKeyLists(
     email: string,
     includeLastExpired: boolean
 ): Promise<SignedKeyListInfo[]> {
-    const fetchedSKLs: {
-        SignedKeyLists: SignedKeyListInfo[];
-    } = await api(getSignedKeyLists({ SinceEpochID: epochID, Email: email }));
+    const { Code: code, ...fetchedSKLs } = await api(getSignedKeyLists({ SinceEpochID: epochID, Email: email }));
     /*
     fetchedSKLs.SignedKeyLists contains:
         - the last expired SKL, i.e. the newest SKL such that MinEpochID <= SinceEpochID
@@ -60,21 +54,26 @@ export async function getParsedSignedKeyLists(
         - the latest SKL, i.e. such that MinEpochID is null
     in chronological order.
     */
-    return fetchedSKLs.SignedKeyLists.slice(includeLastExpired ? 0 : 1);
+    if (code === 1000) return fetchedSKLs.SignedKeyLists.slice(includeLastExpired ? 0 : 1);
+    throw new Error(fetchedSKLs.Error);
 }
 
 export async function getVerifiedEpoch(
     api: Api,
     addressID: string
 ): Promise<{ Data: string; Signature: string } | undefined> {
-    let verifiedEpoch: { Data: string; Signature: string };
+    let verifiedEpoch;
+    let code;
     try {
-        verifiedEpoch = await api(getLatestVerifiedEpoch({ AddressID: addressID }));
+        const { Code: c, ...vE } = await api(getLatestVerifiedEpoch({ AddressID: addressID }));
+        code = c;
+        verifiedEpoch = vE;
     } catch (err) {
         return;
     }
 
-    return verifiedEpoch;
+    if (code === 1000) return verifiedEpoch as { Data: string; Signature: string };
+    throw new Error(verifiedEpoch.Error);
 }
 
 export async function uploadEpoch(epoch: EpochExtended, address: Address, api: Api) {
