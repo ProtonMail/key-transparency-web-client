@@ -2,7 +2,7 @@ import { OpenPGPKey, getKeys, getSignature, encryptMessage, decryptMessage, getM
 import { Api } from './helpers/interfaces/Api';
 import { Address } from './helpers/interfaces/Address';
 import { CachedKey } from './helpers/interfaces/CachedKey';
-import { Epoch, EpochExtended } from './interfaces';
+import { Epoch, EpochExtended, KTInfo, KTInfoSelfAudit, KTInfoToLS } from './interfaces';
 import { SignedKeyList, SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
 import {
     getParsedSignedKeyLists,
@@ -38,10 +38,10 @@ export async function verifyPublicKeys(
     email: string,
     signedKeyList: SignedKeyListInfo | undefined,
     api: Api
-): Promise<{ code: KT_STATUS; error: string }> {
+): Promise<KTInfo> {
     if (!signedKeyList) {
         return {
-            code: KT_STATUS.KT_FAILED,
+            code: KT_STATUS.KTERROR_ADDRESS_NOT_IN_KT,
             error: 'Signed key list undefined',
         };
     }
@@ -96,7 +96,9 @@ export async function verifyPublicKeys(
     try {
         maxEpoch = await fetchEpoch(signedKeyList.MaxEpochID, api);
     } catch (err) {
-        return { code: KT_STATUS.KT_FAILED, error: err.message };
+        let status = KT_STATUS.KT_FAILED;
+        if (err.message === 'Leaf node does not exist') status = KT_STATUS.KTERROR_ADDRESS_NOT_IN_KT;
+        return { code: status, error: err.message };
     }
 
     let returnedDate: number;
@@ -120,16 +122,7 @@ export async function ktSelfAudit(
     apis: Api[],
     addresses: Address[],
     userKeys: CachedKey[]
-): Promise<
-    Map<
-        string,
-        {
-            code: KT_STATUS;
-            verifiedEpoch?: EpochExtended;
-            error: string;
-        }
-    >
-> {
+): Promise<Map<string, KTInfoSelfAudit>> {
     // silentApi is used to prevent red banner when a verified epoch is not found
     const [api, silentApi] = apis;
 
@@ -622,18 +615,11 @@ export async function ktSelfAudit(
 export async function verifySelfAuditResult(
     address: Address | undefined,
     submittedSKL: SignedKeyList,
-    ktSelfAuditResult: Map<
-        string,
-        {
-            code: KT_STATUS;
-            verifiedEpoch?: EpochExtended;
-            error: string;
-        }
-    >,
+    ktSelfAuditResult: Map<string, KTInfoSelfAudit>,
     lastSelfAudit: number,
     isRunning: boolean,
     api: Api
-): Promise<{ code: KT_STATUS; error: string; message: string }> {
+): Promise<KTInfoToLS> {
     if (!address) {
         return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined', message: '' };
     }
@@ -708,7 +694,7 @@ export async function ktSaveToLS(
     address: Address | undefined,
     userKeys: CachedKey[],
     api: Api
-): Promise<{ code: KT_STATUS; error: string }> {
+): Promise<KTInfo> {
     if (!address) {
         return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined' };
     }

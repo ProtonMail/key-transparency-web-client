@@ -1,3 +1,5 @@
+import { KT_STATUS } from './constants';
+
 export interface Epoch {
     EpochID: number;
     TreeHash: string;
@@ -24,4 +26,17 @@ export interface Proof {
     Proof: string;
     Revision: number;
     Name: string;
+}
+
+export interface KTInfo {
+    code: KT_STATUS;
+    error: string;
+}
+
+export interface KTInfoSelfAudit extends KTInfo {
+    verifiedEpoch?: EpochExtended;
+}
+
+export interface KTInfoToLS extends KTInfo {
+    message: string;
 }

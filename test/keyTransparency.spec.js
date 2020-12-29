@@ -93,7 +93,7 @@ describe('key transparency', () => {
 
     it('should fail with no signed key list given', async () => {
         const result = await verifyPublicKeys(keyList, testEmail, null, mockApi(epoch, proof, mockAddress));
-        expect(result.code).toEqual(KT_STATUS.KT_FAILED);
+        expect(result.code).toEqual(KT_STATUS.KTERROR_ADDRESS_NOT_IN_KT);
         expect(result.error).toEqual('Signed key list undefined');
     });
 
