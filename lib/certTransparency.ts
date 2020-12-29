@@ -25,7 +25,12 @@ export function parseCertificate(cert: string) {
 }
 
 export function parseCertChain(certChain: string) {
-    const certArr = certChain.split('-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----');
+    let certArr = certChain.split('-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----');
+    // Temporary change for legacy epochs
+    if (certArr.length === 1) {
+        certArr = certChain.split('-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----');
+    }
+    // END
     for (let i = 0; i < certArr.length; i++) {
         switch (i) {
             case 0:
