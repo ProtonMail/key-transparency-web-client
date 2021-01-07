@@ -1,6 +1,7 @@
 import * as asn1js from 'asn1js';
 import Certificate from 'pkijs/src/Certificate';
 import { verifySCTsForCertificate } from 'pkijs/src/SignedCertificateTimestampList';
+import GeneralName from 'pkijs/src/GeneralName';
 import { base64StringToUint8Array } from './helpers/encoding';
 import { ctLogs, rootCertificates } from './certificates';
 
@@ -63,6 +64,9 @@ export function checkAltName(certificate: Certificate, ChainHash: string, EpochI
     if (!altNamesExt) {
         throw new Error('Epoch certificate does not have AltName extension');
     }
+    altNamesExt.parsedValue.altNames.sort(
+        (firstEl: GeneralName, secondEl: GeneralName) => secondEl.value.length - firstEl.value.length
+    );
     const altName = altNamesExt.parsedValue.altNames[0].value;
     const domain = altNamesExt.parsedValue.altNames[1].value;
     if (`${ChainHash.slice(0, 32)}.${ChainHash.slice(32)}.${EpochID}.0.${domain.slice(6, domain.length)}` !== altName) {
