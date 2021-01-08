@@ -86,7 +86,7 @@ export async function verifyPublicKeys(
     // If signedKeyList is (allegedly) too young, users is warned and verification cannot continue
     if (signedKeyList.MaxEpochID === null) {
         return {
-            code: KT_STATUS.KT_WARNING,
+            code: KT_STATUS.KTERROR_MINEPOCHID_NULL,
             error: 'The keys were generated too recently to be included in key transparency',
         };
     }

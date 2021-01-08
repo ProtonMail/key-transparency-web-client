@@ -78,7 +78,7 @@ describe('key transparency', () => {
             { ...skl, MinEpochID: null, MaxEpochID: null },
             mockApi(epoch, proof, mockAddress)
         );
-        expect(result.code).toEqual(KT_STATUS.KT_WARNING);
+        expect(result.code).toEqual(KT_STATUS.KTERROR_MINEPOCHID_NULL);
         expect(result.error).toEqual('The keys were generated too recently to be included in key transparency');
     });
 
