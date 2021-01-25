@@ -10,7 +10,7 @@ import {
 } from 'pmcrypto';
 import { Api } from './helpers/interfaces/Api';
 import { Epoch, EpochExtended, KeyInfo } from './interfaces';
-import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
+import { SignedKeyListEpochs } from './helpers/interfaces/SignedKeyList';
 import { fetchProof, fetchEpoch } from './fetchHelper';
 import { checkAltName, verifyLEcert, verifySCT, parseCertChain } from './certTransparency';
 import { verifyProof, verifyChainHash } from './merkleTree';
@@ -183,7 +183,7 @@ export function isTimestampTooOld(time: number, refereceTime?: number) {
     return Math.abs(refereceTime - time) > MAX_EPOCH_INTERVAL;
 }
 
-export async function verifyCurrentEpoch(signedKeyList: SignedKeyListInfo, email: string, api: Api) {
+export async function verifyCurrentEpoch(signedKeyList: SignedKeyListEpochs, email: string, api: Api) {
     const currentEpoch = await fetchEpoch(signedKeyList.MaxEpochID as number, api);
 
     const returnedDate: number = await verifyEpoch(currentEpoch, email, signedKeyList.Data, api);

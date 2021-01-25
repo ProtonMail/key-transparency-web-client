@@ -9,7 +9,7 @@ import {
 } from './helpers/api/keyTransparency';
 import { Address } from './helpers/interfaces/Address';
 import { Api } from './helpers/interfaces/Api';
-import { SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
+import { SignedKeyListEpochs } from './helpers/interfaces/SignedKeyList';
 import { Epoch, EpochExtended, Proof } from './interfaces';
 
 const cachedEpochs: Map<number, Epoch> = new Map();
@@ -45,7 +45,7 @@ export async function getParsedSignedKeyLists(
     epochID: number,
     email: string,
     includeLastExpired: boolean
-): Promise<SignedKeyListInfo[]> {
+): Promise<SignedKeyListEpochs[]> {
     const { Code: code, ...fetchedSKLs } = await api(getSignedKeyLists({ SinceEpochID: epochID, Email: email }));
     /*
     fetchedSKLs.SignedKeyLists contains:

@@ -1,5 +1,5 @@
 import { Key } from './Key';
-import { SignedKeyListInfo } from './SignedKeyList';
+import { SignedKeyListEpochs } from './SignedKeyList';
 
 enum ADDRESS_TYPE {
     TYPE_ORIGINAL = 1,
@@ -16,12 +16,12 @@ export interface Address {
     HasKeys: number;
     ID: string;
     Keys: Key[];
+    SignedKeyList: SignedKeyListEpochs | null;
     Order: number;
     Priority: number;
     Receive: number;
     Send: number;
     Signature: string;
-    SignedKeyList: SignedKeyListInfo;
     Status: number;
     Type: ADDRESS_TYPE;
 }

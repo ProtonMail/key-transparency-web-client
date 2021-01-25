@@ -1,9 +1,8 @@
-import { OpenPGPKey, getKeys, getSignature, encryptMessage, decryptMessage, getMessage } from 'pmcrypto';
+import { OpenPGPKey, getSignature, encryptMessage, decryptMessage, getMessage } from 'pmcrypto';
 import { Api } from './helpers/interfaces/Api';
 import { Address } from './helpers/interfaces/Address';
-import { CachedKey } from './helpers/interfaces/CachedKey';
 import { Epoch, EpochExtended, KTInfo, KTInfoSelfAudit, KTInfoToLS } from './interfaces';
-import { SignedKeyList, SignedKeyListInfo } from './helpers/interfaces/SignedKeyList';
+import { SignedKeyList, SignedKeyListEpochs } from './helpers/interfaces/SignedKeyList';
 import {
     getParsedSignedKeyLists,
     fetchProof,
@@ -36,7 +35,7 @@ export async function verifyPublicKeys(
         PublicKey: string;
     }[],
     email: string,
-    signedKeyList: SignedKeyListInfo | undefined,
+    signedKeyList: SignedKeyListEpochs | undefined,
     api: Api
 ): Promise<KTInfo> {
     if (!signedKeyList) {
@@ -121,7 +120,7 @@ export async function verifyPublicKeys(
 export async function ktSelfAudit(
     apis: Api[],
     addresses: Address[],
-    userKeys: CachedKey[]
+    userKeys: { privateKey?: OpenPGPKey }[] | undefined
 ): Promise<Map<string, KTInfoSelfAudit>> {
     // silentApi is used to prevent red banner when a verified epoch is not found
     const [api, silentApi] = apis;
@@ -148,25 +147,10 @@ export async function ktSelfAudit(
     }
 
     // Prepare user private key for localStorage decrypt
-    const userPrivateKeys = (
-        await Promise.all(
-            userKeys.map(async (cachedKey) => {
-                if (cachedKey.error) {
-                    return;
-                }
-                if (!cachedKey.privateKey) {
-                    try {
-                        [cachedKey.privateKey] = await getKeys(cachedKey.Key.PrivateKey);
-                    } catch (err) {
-                        return;
-                    }
-                }
-                return cachedKey.privateKey;
-            })
-        )
-    ).filter((privateKey: OpenPGPKey | undefined): privateKey is OpenPGPKey => {
-        return privateKey !== undefined;
-    });
+    const userKey = userKeys ? userKeys[0].privateKey : undefined;
+    if (!userKey) {
+        throw new Error('Missing primary user key');
+    }
 
     // Main loop through addresses
     for (let i = 0; i < addresses.length; i++) {
@@ -218,7 +202,7 @@ export async function ktSelfAudit(
                         (
                             await decryptMessage({
                                 message: await getMessage(ktBlob),
-                                privateKeys: userPrivateKeys,
+                                privateKeys: userKey,
                             })
                         ).data
                     );
@@ -235,7 +219,7 @@ export async function ktSelfAudit(
 
                 // Retrieve oldest SKL since localEpochID
                 const fetchedSKLs = await getParsedSignedKeyLists(api, localEpochID, email, false);
-                const includedSKLarray: SignedKeyListInfo[] = await Promise.all(
+                const includedSKLarray: SignedKeyListEpochs[] = await Promise.all(
                     fetchedSKLs.filter(async (skl) => {
                         const sklSignature = await getSignature(skl.Signature);
                         return (
@@ -690,19 +674,29 @@ export async function verifySelfAuditResult(
 }
 
 export async function ktSaveToLS(
-    message: string,
-    address: Address | undefined,
-    userKeys: CachedKey[],
+    messageObject: { message: string; addressID: string },
+    userKeys: { publicKey?: OpenPGPKey }[] | undefined,
     api: Api
-): Promise<KTInfo> {
-    if (!address) {
-        return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined' };
+) {
+    if (!messageObject.addressID || messageObject.addressID === '') {
+        throw new Error('Address ID is undefined');
     }
 
+    if (!messageObject.message || messageObject.message === '') {
+        throw new Error('Message is undefined');
+    }
+
+    const { message, addressID } = messageObject;
+
     if (hasStorage()) {
+        const userKey = userKeys ? userKeys[0].publicKey : undefined;
+        if (!userKey) {
+            throw new Error('Missing primary user key');
+        }
+
         // Check if there is something in localStorage with counter either 0 or 1 and the previous or current epoch
-        // Format is kt:{counter}:{address.ID}:{epoch}, therefore splitKey = [kt, {counter}, {address.ID}, {epoch}].
-        const ktBlobs = getKTBlobs(address.ID);
+        // Format is kt:{counter}:{addressID}:{epoch}, therefore splitKey = [kt, {counter}, {addressID}, {epoch}].
+        const ktBlobs = getKTBlobs(addressID);
         const currentEpoch = await fetchLastEpoch(api);
         let counter = 0;
 
@@ -713,11 +707,11 @@ export async function ktSaveToLS(
                 const key: string = ktBlobs.keys().next().value;
                 const splitKey = key.split(':');
                 if (splitKey[3] > `${currentEpoch}`) {
-                    return { code: KT_STATUS.KT_FAILED, error: 'Inconsistent data in localStorage' };
+                    throw new Error('Inconsistent data in localStorage');
                 }
                 if (splitKey[1] !== '0') {
                     removeItem(key);
-                    setItem(`kt:0:${address.ID}:${splitKey[3]}`, ktBlobs.get(key) as string);
+                    setItem(`kt:0:${addressID}:${splitKey[3]}`, ktBlobs.get(key) as string);
                 }
                 counter = splitKey[3] !== `${currentEpoch}` ? 1 : 0;
                 break;
@@ -728,17 +722,11 @@ export async function ktSaveToLS(
                     const splitKey = key.split(':');
                     if (splitKey[1] === '0') {
                         if (splitKey[3] >= `${currentEpoch}`) {
-                            return {
-                                code: KT_STATUS.KT_FAILED,
-                                error: 'Inconsistent data in localStorage',
-                            };
+                            throw new Error('Inconsistent data in localStorage');
                         }
                     } else {
                         if (splitKey[3] > `${currentEpoch}`) {
-                            return {
-                                code: KT_STATUS.KT_FAILED,
-                                error: 'Inconsistent data in localStorage',
-                            };
+                            throw new Error('Inconsistent data in localStorage');
                         }
                         counter = 1;
                     }
@@ -746,47 +734,18 @@ export async function ktSaveToLS(
                 break;
             }
             default:
-                return { code: KT_STATUS.KT_FAILED, error: 'There are too many blobs in localStorage' };
+                throw new Error('There are too many blobs in localStorage');
         }
 
         // Save the new blob
-        const userPrimaryPublicKey = (
-            await Promise.all(
-                userKeys.map(async (cachedKey) => {
-                    if (cachedKey.error || cachedKey.Key.Primary !== 1) {
-                        return;
-                    }
-                    if (!cachedKey.publicKey) {
-                        try {
-                            [cachedKey.publicKey] = await getKeys(cachedKey.Key.PublicKey);
-                        } catch (err) {
-                            return;
-                        }
-                    }
-                    return cachedKey.publicKey;
-                })
-            )
-        ).filter((publicKey: OpenPGPKey | undefined): publicKey is OpenPGPKey => {
-            return publicKey !== undefined;
-        });
-
-        if (userPrimaryPublicKey.length === 0) {
-            return {
-                code: KT_STATUS.KT_FAILED,
-                error: 'No keys found to encrypt KT blob to localStorage',
-            };
-        }
-
         setItem(
-            `kt:${counter}:${address.ID}:${currentEpoch}`,
+            `kt:${counter}:${addressID}:${currentEpoch}`,
             (
                 await encryptMessage({
                     data: message,
-                    publicKeys: userPrimaryPublicKey,
+                    publicKeys: userKey,
                 })
             ).data
         );
     }
-
-    return { code: KT_STATUS.KT_PASSED, error: '' };
 }
