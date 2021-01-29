@@ -10,3 +10,10 @@ export enum KT_STATUS {
 }
 
 export const vrfHexKey = '2d7688feb429f714f102f758412cd4b81337b307122770f620ad9e4ac898a2eb';
+
+export class KTError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'KTError';
+    }
+}

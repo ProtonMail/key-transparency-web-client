@@ -37,6 +37,7 @@ export interface KTInfoSelfAudit extends KTInfo {
     verifiedEpoch?: EpochExtended;
 }
 
-export interface KTInfoToLS extends KTInfo {
+export interface KTInfoToLS {
     message: string;
+    addressID: string;
 }

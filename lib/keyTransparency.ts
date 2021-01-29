@@ -13,7 +13,7 @@ import {
 } from './fetchHelper';
 import { setItem, hasStorage, removeItem } from './helpers/storage';
 import { getCanonicalEmailMap } from './helpers/api/canonicalEmailMap';
-import { KT_STATUS, EXP_EPOCH_INTERVAL } from './constants';
+import { KT_STATUS, EXP_EPOCH_INTERVAL, KTError } from './constants';
 import { SimpleMap } from './helpers/interfaces/utils';
 import {
     checkSignature,
@@ -83,7 +83,7 @@ export async function verifyPublicKeys(
     }
 
     // If signedKeyList is (allegedly) too young, users is warned and verification cannot continue
-    if (signedKeyList.MaxEpochID === null) {
+    if (!signedKeyList.MaxEpochID || signedKeyList.MaxEpochID === null) {
         return {
             code: KT_STATUS.KTERROR_MINEPOCHID_NULL,
             error: 'The keys were generated too recently to be included in key transparency',
@@ -148,9 +148,6 @@ export async function ktSelfAudit(
 
     // Prepare user private key for localStorage decrypt
     const userKey = userKeys ? userKeys[0].privateKey : undefined;
-    if (!userKey) {
-        throw new Error('Missing primary user key');
-    }
 
     // Main loop through addresses
     for (let i = 0; i < addresses.length; i++) {
@@ -196,6 +193,14 @@ export async function ktSelfAudit(
             const ktBlob = ktBlobs[i];
             if (ktBlob) {
                 // Decrypt and parse ktBlob
+                if (!userKey) {
+                    addressesToVerifiedEpochs.set(address.ID, {
+                        code: KT_STATUS.KT_FAILED,
+                        error: `Missing primary user key`,
+                    });
+                    errorFlag = true;
+                    break;
+                }
                 let decryptedBlob;
                 try {
                     decryptedBlob = JSON.parse(
@@ -223,7 +228,7 @@ export async function ktSelfAudit(
                     fetchedSKLs.filter(async (skl) => {
                         const sklSignature = await getSignature(skl.Signature);
                         return (
-                            (skl.MinEpochID === null || skl.MinEpochID > localEpochID) &&
+                            (!skl.MinEpochID || skl.MinEpochID === null || skl.MinEpochID > localEpochID) &&
                             getSignatureTime(sklSignature) >= getSignatureTime(localSignature)
                         );
                     })
@@ -271,7 +276,7 @@ export async function ktSelfAudit(
 
                 // If the includedSKL hasn't had time of entering an epoch, self-audit proceeds.
                 // Otherwise, we check it's there.
-                if (includedSKL.MinEpochID !== null) {
+                if (includedSKL.MinEpochID && includedSKL.MinEpochID !== null) {
                     const minEpoch = await fetchEpoch(includedSKL.MinEpochID, api);
 
                     const returnedDate = await verifyEpoch(minEpoch, email, includedSKL.Data, api);
@@ -352,7 +357,7 @@ export async function ktSelfAudit(
         if (!verifiedEpoch) {
             // If the MinEpochID is null the address was created after the last epoch generation, therefore
             // self-audit is postponed at least until the SKL is included in the next epoch
-            if (address.SignedKeyList.MinEpochID === null) {
+            if (!address.SignedKeyList.MinEpochID || address.SignedKeyList.MinEpochID === null) {
                 addressesToVerifiedEpochs.set(address.ID, {
                     code: KT_STATUS.KT_WARNING,
                     error: 'Signed key list has not been included in any epoch yet, self-audit is postponed',
@@ -530,7 +535,9 @@ export async function ktSelfAudit(
             }
 
             const includedSKL =
-                address.SignedKeyList.MinEpochID === null || address.SignedKeyList.MinEpochID > epochToVerify.EpochID
+                !address.SignedKeyList.MinEpochID ||
+                address.SignedKeyList.MinEpochID === null ||
+                address.SignedKeyList.MinEpochID > epochToVerify.EpochID
                     ? previousSKL
                     : address.SignedKeyList;
 
@@ -558,7 +565,8 @@ export async function ktSelfAudit(
             }
 
             if (
-                (address.SignedKeyList.MinEpochID === null ||
+                (!address.SignedKeyList.MinEpochID ||
+                    address.SignedKeyList.MinEpochID === null ||
                     address.SignedKeyList.MinEpochID > epochToVerify.EpochID) &&
                 isTimestampTooOld(getSignatureTime(signatureSKL), epochToVerify.CertificateDate)
             ) {
@@ -605,29 +613,25 @@ export async function verifySelfAuditResult(
     api: Api
 ): Promise<KTInfoToLS> {
     if (!address) {
-        return { code: KT_STATUS.KT_FAILED, error: 'Address is undefined', message: '' };
+        throw new KTError('Address is undefined');
     }
 
     if (isRunning) {
-        return { code: KT_STATUS.KT_FAILED, error: 'Self-audit is still running', message: '' };
+        throw new KTError('Self-audit is still running');
     }
 
     if (Date.now() - lastSelfAudit > EXP_EPOCH_INTERVAL) {
-        return { code: KT_STATUS.KT_FAILED, error: 'Self-audit should run before proceeding', message: '' };
+        throw new KTError('Self-audit should run before proceeding');
     }
 
     const ktResult = ktSelfAuditResult.get(address.ID);
 
     if (!ktResult) {
-        return { code: KT_STATUS.KT_FAILED, error: `${address.Email} was not audited`, message: '' };
+        throw new KTError(`${address.Email} was not audited`);
     }
 
     if (ktResult.code === KT_STATUS.KT_FAILED) {
-        return {
-            code: KT_STATUS.KT_FAILED,
-            error: `Self-audit failed for ${address.Email} with error "${ktResult.error}"`,
-            message: '',
-        };
+        throw new KTError(`Self-audit failed for ${address.Email} with error "${ktResult.error}"`);
     }
 
     let verifiedEpoch;
@@ -646,44 +650,31 @@ export async function verifySelfAuditResult(
     }
 
     if (!verifiedEpoch) {
-        return {
-            code: KT_STATUS.KT_FAILED,
-            error: 'Verified epoch not found',
-            message: '',
-        };
+        throw new KTError('Verified epoch not found');
     }
 
     if (
         isTimestampTooOld(verifiedEpoch.CertificateDate, getSignatureTime(await getSignature(submittedSKL.Signature)))
     ) {
-        return {
-            code: KT_STATUS.KT_FAILED,
-            error: `Verified epoch for ${address.Email} has invalid CertificateDate`,
-            message: '',
-        };
+        throw new KTError(`Verified epoch for ${address.Email} has invalid CertificateDate`);
     }
 
     return {
-        code: KT_STATUS.KT_PASSED,
-        error: '',
         message: JSON.stringify({
             EpochID: verifiedEpoch.EpochID,
             SignedKeyList: submittedSKL,
         }),
+        addressID: address.ID,
     };
 }
 
 export async function ktSaveToLS(
-    messageObject: { message: string; addressID: string },
+    messageObject: KTInfoToLS | undefined,
     userKeys: { publicKey?: OpenPGPKey }[] | undefined,
     api: Api
 ) {
-    if (!messageObject.addressID || messageObject.addressID === '') {
-        throw new Error('Address ID is undefined');
-    }
-
-    if (!messageObject.message || messageObject.message === '') {
-        throw new Error('Message is undefined');
+    if (!messageObject) {
+        throw new KTError('Message object not found');
     }
 
     const { message, addressID } = messageObject;
@@ -691,7 +682,7 @@ export async function ktSaveToLS(
     if (hasStorage()) {
         const userKey = userKeys ? userKeys[0].publicKey : undefined;
         if (!userKey) {
-            throw new Error('Missing primary user key');
+            throw new KTError('Missing primary user key');
         }
 
         // Check if there is something in localStorage with counter either 0 or 1 and the previous or current epoch
@@ -707,7 +698,7 @@ export async function ktSaveToLS(
                 const key: string = ktBlobs.keys().next().value;
                 const splitKey = key.split(':');
                 if (splitKey[3] > `${currentEpoch}`) {
-                    throw new Error('Inconsistent data in localStorage');
+                    throw new KTError('Inconsistent data in localStorage');
                 }
                 if (splitKey[1] !== '0') {
                     removeItem(key);
@@ -722,11 +713,11 @@ export async function ktSaveToLS(
                     const splitKey = key.split(':');
                     if (splitKey[1] === '0') {
                         if (splitKey[3] >= `${currentEpoch}`) {
-                            throw new Error('Inconsistent data in localStorage');
+                            throw new KTError('Inconsistent data in localStorage');
                         }
                     } else {
                         if (splitKey[3] > `${currentEpoch}`) {
-                            throw new Error('Inconsistent data in localStorage');
+                            throw new KTError('Inconsistent data in localStorage');
                         }
                         counter = 1;
                     }
@@ -734,7 +725,7 @@ export async function ktSaveToLS(
                 break;
             }
             default:
-                throw new Error('There are too many blobs in localStorage');
+                throw new KTError('There are too many blobs in localStorage');
         }
 
         // Save the new blob
