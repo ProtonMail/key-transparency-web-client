@@ -26,45 +26,6 @@ describe('key transparency', () => {
         }
     };
 
-    it('should verify public keys', async () => {
-        let newestEpoch;
-        let newestProof;
-        const path = 'https://protonmail.blue/api/kt/epochs/';
-        try {
-            const response1 = await fetch(`${path}`);
-            if (response1.ok) {
-                const epochInfo = await response1.json();
-                const response2 = await fetch(`${path}${epochInfo.Epochs[0].EpochID}`);
-                if (response2.ok) {
-                    newestEpoch = await response2.json();
-                } else {
-                    throw new Error('response2 failed');
-                }
-                const response3 = await fetch(`${path}${epochInfo.Epochs[0].EpochID}/proof/${testEmail}`);
-                if (response3.ok) {
-                    newestProof = await response3.json();
-                } else {
-                    throw new Error('response3 failed');
-                }
-            } else {
-                throw new Error('response1 failed');
-            }
-        } catch (err) {
-            console.warn('Cannot perform verification test');
-        }
-
-        if (newestEpoch && newestProof) {
-            const result = await verifyPublicKeys(
-                keyList,
-                testEmail,
-                { ...skl, MaxEpochID: newestEpoch.EpochID },
-                mockApi(newestEpoch, newestProof, mockAddress)
-            );
-            expect(result.code).toEqual(KT_STATUS.KT_PASSED);
-            expect(result.error).toEqual('');
-        }
-    });
-
     it('should verify public keys and fail when it checks the certificate returnedDate', async () => {
         const result = await verifyPublicKeys(keyList, testEmail, skl, mockApi(epoch, proof, mockAddress));
         expect(result.code).toEqual(KT_STATUS.KT_FAILED);
