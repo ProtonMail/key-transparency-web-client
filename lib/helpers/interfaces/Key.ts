@@ -1,3 +1,5 @@
+import { OpenPGPKey } from 'pmcrypto';
+
 export interface Key {
     ID: string;
     Primary: 1 | 0;
@@ -10,4 +12,10 @@ export interface Key {
     PrivateKey: string; // armored key
     Token?: string;
     Signature: string;
+}
+
+export interface DecryptedKey {
+    ID: string;
+    privateKey: OpenPGPKey;
+    publicKey: OpenPGPKey;
 }

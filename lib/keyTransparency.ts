@@ -28,6 +28,7 @@ import {
     verifyKeyLists,
 } from './utils';
 import { parseCertChain } from './certTransparency';
+import { DecryptedKey } from './helpers/interfaces/Key';
 
 export async function verifyPublicKeys(
     keyList: {
@@ -670,7 +671,7 @@ export async function verifySelfAuditResult(
 
 export async function ktSaveToLS(
     messageObject: KTInfoToLS | undefined,
-    userKeys: { publicKey?: OpenPGPKey }[] | undefined,
+    userKeys: DecryptedKey[] | undefined,
     api: Api
 ) {
     if (!messageObject) {
