@@ -14,8 +14,7 @@ export interface Key {
     Signature: string;
 }
 
-export interface DecryptedKey {
-    ID: string;
+export interface KeyPair {
     privateKey: OpenPGPKey;
     publicKey: OpenPGPKey;
 }
