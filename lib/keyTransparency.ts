@@ -693,27 +693,33 @@ export async function ktSaveToLS(messageObject: KTInfoToLS | undefined, userKeys
                 break;
             case 1: {
                 const key: string = ktBlobs.keys().next().value;
-                const splitKey = key.split(':');
-                if (splitKey[3] > `${currentEpoch}`) {
+                const [counterBlob, , epochBlob] = key
+                    .split(':')
+                    .slice(1)
+                    .map((n) => +n);
+                if (epochBlob > currentEpoch) {
                     throw new KTError('Inconsistent data in localStorage');
                 }
-                if (splitKey[1] !== '0') {
+                if (counterBlob !== 0) {
                     removeItem(key);
-                    setItem(`kt:0:${addressID}:${splitKey[3]}`, ktBlobs.get(key) as string);
+                    setItem(`kt:0:${addressID}:${epochBlob}`, ktBlobs.get(key) as string);
                 }
-                counter = splitKey[3] !== `${currentEpoch}` ? 1 : 0;
+                counter = epochBlob !== currentEpoch ? 1 : 0;
                 break;
             }
             case 2: {
                 for (const element of ktBlobs) {
                     const [key] = element;
-                    const splitKey = key.split(':');
-                    if (splitKey[1] === '0') {
-                        if (splitKey[3] >= `${currentEpoch}`) {
+                    const [counterBlob, , epochBlob] = key
+                        .split(':')
+                        .slice(1)
+                        .map((n) => +n);
+                    if (counterBlob === 0) {
+                        if (epochBlob >= currentEpoch) {
                             throw new KTError('Inconsistent data in localStorage');
                         }
                     } else {
-                        if (splitKey[3] > `${currentEpoch}`) {
+                        if (epochBlob > currentEpoch) {
                             throw new KTError('Inconsistent data in localStorage');
                         }
                         counter = 1;
